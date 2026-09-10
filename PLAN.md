@@ -516,11 +516,10 @@ are; exact signatures to firm up during implementation, not frozen here.
 (node-integer-value n) (node-float-value n) (node-boolean-value n)
 (node-length n) (node-item n index)      ; 1-based
 (node-append! seq item)
-(node-iterate seq visit-proc)
+(node-iterate-items seq visit-proc)      ; visit-proc: (element) -> _
 (node-value map key) (node-has-key? map key) (node-required map key)
 (node-append-pair! map key value)
-(node-iterate map visit-proc)            ; overload on node-kind, or
-                                          ; split as node-iterate-pairs
+(node-iterate-pairs map visit-proc)      ; visit-proc: (key value) -> _
 (node-integer-value map key) (node-integer-value map key default)
 ;; ... float/boolean/string, same pattern
 (node-by-path n path) (node-path n)
@@ -538,14 +537,21 @@ are; exact signatures to firm up during implementation, not frozen here.
 (load-file path #!optional (resolve-anchors? #t))      ; -> list of values
 ```
 
-`node-iterate` overloading on sequence-vs-mapping via a single name
-(dispatching on `node-kind` internally, visitor arity implied by kind)
-vs. two distinct names (`node-iterate-items` / `node-iterate-pairs`) is
-an open question — Scheme has no static arity-based overload
-resolution the way Ada's two `Iterate` procedures get resolved by
-parameter profile, so this needs either a runtime kind check or
-separate names. Leaning toward separate names for clarity at the call
-site; revisit once real call sites exist.
+**Decided: two names, `node-iterate-items` (sequence) and
+`node-iterate-pairs` (mapping)**, not one `node-iterate` dispatching on
+`node-kind`. Scheme has no static arity-based overload resolution the
+way Ada's two `Iterate` procedures get resolved by parameter profile,
+and the two kinds' natural visitor shapes genuinely differ: a sequence
+visitor takes one argument (`element`), a mapping visitor takes two
+(`key value`). A single dispatching `node-iterate` would have to either
+inspect the visitor procedure's arity at runtime (fragile — CHICKEN can
+check `procedure-arity`, but it's an odd thing to lean on for dispatch)
+or force both kinds through one uniform shape, e.g. always calling the
+visitor as `(index-or-key value)` — which changes a sequence visitor's
+signature from "just the element" to "index and element" just to keep
+a single name, distorting the more common case to accommodate the
+less common one. Two names avoid distorting either kind's visitor
+shape and cost nothing but one extra exported identifier.
 
 ## Multi-document YAML streams
 
@@ -723,8 +729,6 @@ before writing the first test file):
   existing Chicken YAML eggs are BSD-style (`yaml`) and MIT
   (`libyaml`). Pick one before the first public release, doesn't block
   design/implementation.
-- `node-iterate` naming split (single overloaded name vs.
-  `node-iterate-items`/`node-iterate-pairs`) — see API surface sketch.
 - CHICKEN 4 support: not planned. The `yaml` egg supports both via
   `cond-expand`; this project targets CHICKEN 5.4.0 only unless a
   concrete need for 4 shows up.
@@ -738,7 +742,7 @@ before writing the first test file):
    `-parse-file` (with the copy-always buffer strategy from day one,
    not retrofitted), `document-root`, `node-kind`/predicates,
    `node-scalar-value`, `node-length`/`node-item`, `node-value`/
-   `node-has-key?`, `node-iterate` (both kinds), `node-by-path`/
+   `node-has-key?`, `node-iterate-items`/`node-iterate-pairs`, `node-by-path`/
    `node-path`. Enough to port `test-quickstart` and `test-navigate`.
 3. **Typed scalars**: the full `node-integer-value`/etc. family, core
    schema + the two extensions, `test-scalars` exhaustive coverage.
