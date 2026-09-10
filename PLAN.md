@@ -530,6 +530,69 @@ instead of re-parsing the message string — the existing `yaml` egg
 already does this (`'line`/`'column`/`'problem`/`'context` on its parse
 exception), a convention worth keeping.
 
+### Location and Path: same two abilities as `alibfyaml`, attached automatically where Ada doesn't
+
+`slibfyaml` gets both of `alibfyaml`'s node-diagnostic tools, for the
+same reason `alibfyaml` grew both instead of just one (see its own
+`Libfyaml.Nodes.Path` doc comment and the commit that added it,
+"Add Libfyaml.Nodes.Path, independent of Location"): they cover
+different node shapes.
+
+- **`node-location`/`node-has-location?`** (line/column) — **scalar
+  nodes only**. Backed by `fy_node_get_scalar_token`/
+  `fy_token_start_mark`, which only exist for a node with a scalar
+  token — a mapping or sequence node has no token to hang a position
+  off of at all.
+- **`node-path`/`node-by-path`** — **any node kind**, mapping and
+  sequence included, via `fy_node_get_path`/`fy_node_by_path`. This is
+  exactly why `alibfyaml` added `Path` after already having `Location`:
+  a mapping missing a required key has no node/token for the *absent*
+  key to report a `Location` for, but the mapping's own `Path` is
+  always available and, combined with the missing key's name,
+  unambiguously identifies where the problem is.
+
+**Where this goes further than `alibfyaml`**: in Ada, `Required`
+raising `Missing_Key` and the typed accessors raising `Data_Error`
+carry only a bare message (`"missing required key ""host"""`,
+`"not a valid integer: ""banana"""` — confirmed by reading
+`libfyaml-nodes.adb`'s actual `raise` statements) with no `Path`/
+`Location` attached; a caller who wants that context has to fetch it
+themselves and combine it manually, exactly as `test/
+example_missing_field.adb` demonstrates by hand. That's a reasonable
+choice in Ada, where exceptions carry only a message string by
+convention. **CHICKEN conditions don't have that restriction** — they
+already carry structured fields for `parse`/`resolve` above, so
+`slibfyaml`'s `missing-key` and `data` conditions should do the same,
+automatically, since the accessor already holds the exact `node`
+needed to compute it:
+
+- `(exn slibfyaml missing-key)` carries `'path` — `(node-path map)` —
+  in addition to `'message`, and the message itself folds it in
+  (`"missing required key \"host\" at /server"`, echoing the same
+  spirit as the gcc-style `parse` message above without literally
+  reusing that format, since this isn't a file:line:column diagnostic).
+- `(exn slibfyaml data)` carries `'path` (`(node-path n)`, always
+  available) and, when `(node-has-location? n)` is true, `'line`/
+  `'column` too — both raised automatically by the shared internal
+  helper every typed accessor already funnels through to signal a
+  type mismatch, so no call site has to remember to attach them.
+
+This costs nothing extra at the point of raising (the `node` is
+already in hand) and means a caller gets full "which key, where in the
+tree, and if applicable what line" context from the condition object
+itself, with no manual `node-path`/`node-location` call of their own
+required — purely additive to what `alibfyaml` already established as
+the two right tools for this job, not a different design.
+
+Worth relaying back to `alibfyaml` as a possible enhancement (automatic
+`Path`/`Location` fields on `Missing_Key`/`Data_Error`'s exception
+occurrence, via `Ada.Exceptions.Exception_Information` or a dedicated
+accessor) rather than requiring `example_missing_field.adb`'s
+manual-combination pattern at every call site — flagging this as a
+suggestion, not doing it, since changing what an already-shipped
+exception carries is a bigger behavioral change there than adding a
+field to a condition type that doesn't exist yet here.
+
 ## Typed scalar accessors
 
 Same schema as `alibfyaml`: YAML 1.2's
@@ -772,7 +835,10 @@ before writing the first test file):
   `test-streams` (including a mid-stream parse error case),
   `test-mutate` (`document-insert-at!`'s success and failure
   outcomes for the node passed in), `test-anchors`, `test-parse-errors`,
-  `test-location`, `test-path`.
+  `test-location`, `test-path` (including a `missing-key`/`data`
+  condition's automatic `'path`/`'line`/`'column` fields — the
+  `slibfyaml` case mirroring what `alibfyaml`'s `test/
+  example_missing_field.adb` demonstrates by hand).
 - `test-scheme` — `(slibfyaml scheme)` coverage: single- and
   multi-document `load-string`/`load-file` (asserting a list is always
   returned, length matching document count), `node->scheme` on a
