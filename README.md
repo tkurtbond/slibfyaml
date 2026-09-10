@@ -10,12 +10,18 @@ handles, emit it back out — rather than converting the whole document
 into a native Scheme value up front the way the existing `yaml` and
 `libyaml` Chicken eggs do.
 
-**Status: Phase 1 (skeleton) done.** `(slibfyaml thin)` — the raw FFI
-layer — builds, links, installs, and imports under both CHICKEN 5.4.0
-and 6.0.0, confirmed via `tests/test-thin.scm` (passing, and confirmed
-leak/error-free under valgrind). Everything above `(slibfyaml thin)`
-(nodes, documents, streaming, the value-materializing API) doesn't
-exist yet — see `PLAN.md`'s Phased roadmap.
+**Status: Phase 2 (read-only parse + navigate) done.** Parsing
+(`document-parse-string`/`-parse-file`), read-only tree navigation
+(`node-kind`/predicates, `node-scalar-value`, `node-length`/`node-item`,
+`node-value`/`node-has-key?`, `node-iterate-items`/`node-iterate-pairs`,
+`node-by-path`/`node-path`), and the `use-after-free`/`parse` error
+conditions all work end to end, confirmed via `tests/test-quickstart.scm`
+and `tests/test-navigate.scm` (both passing, both leak/error-free under
+valgrind — including through the deliberate parse-failure and
+use-after-free paths) under both CHICKEN 5.4.0 and 6.0.0. No typed
+scalars yet (every check so far compares raw scalar text), and nothing
+past read-only navigation (mutation, emit, streaming, the
+value-materializing API) exists yet — see `PLAN.md`'s Phased roadmap.
 
 ## Scope
 
@@ -66,13 +72,22 @@ parser, no separate typed-scalar logic. See PLAN.md's
 - `slibfyaml-thin.scm` — **done.** Low-level 1:1 `foreign-lambda`
   imports over libfyaml's exported C symbols. No ownership or
   error-checking policy.
-- `slibfyaml.scm` — condition types (`parse`, `emit`, `missing-key`,
-  `data`, `resolve`).
-- `slibfyaml-nodes.scm` — `node`: a cheap, non-owning handle onto a
-  tree node.
-- `slibfyaml-documents.scm` — `document`: the owner of a parsed or
-  freshly-built tree, with explicit `document-destroy!` plus a
-  GC finalizer as a backstop.
+- `slibfyaml.scm` — **done so far.** Condition types: `parse` and
+  `use-after-free` exist; `emit`, `missing-key`, `data`, `resolve`,
+  `consumed` are added in the phases that introduce the operations
+  that raise them.
+- `slibfyaml-nodes.scm` — **done for read-only access.** `node`: a
+  cheap, non-owning handle onto a tree node, with owner-liveness
+  tracking (a use-after-free on a destroyed document's node raises a
+  condition instead of reading freed memory — see PLAN.md's Memory
+  model section, the one place this binding's design goes beyond
+  `alibfyaml`'s own Ada contract). Mutation (`node-append!` etc.) is
+  Phase 4.
+- `slibfyaml-documents.scm` — **done for read-only access.**
+  `document`: the owner of a parsed tree, with explicit
+  `document-destroy!` (idempotent) plus a GC finalizer as a backstop,
+  never RAII (CHICKEN has none). Building/mutating/emitting a document
+  is Phase 4.
 - `slibfyaml-documents-streams.scm` — multi-document YAML streams.
 - `slibfyaml-scheme.scm` — the value-materializing convenience API
   (`node->scheme`, `load-string`, `load-file`).

@@ -12,32 +12,22 @@
 ;;;; ok/FAIL convention matches alibfyaml's own test style (see its
 ;;;; AGENTS.md): each check prints "ok   - <label>" or "FAIL - <label>",
 ;;;; and the run ends with "All checks passed." or "<N> check(s) failed."
-;;;; -- kept inline here rather than factored into a shared helper, since
-;;;; this is still the only test file; factor out once a second one needs
-;;;; the same few lines (see PLAN.md's Testing plan for what's coming:
-;;;; test-scalars, test-navigate, ...).
+;;;; -- see check.scm for the shared implementation, also used by every
+;;;; other tests/test-*.scm file.
+
+(include "check.scm")
 
 (import (slibfyaml thin))
 (import (chicken foreign))
 (import (chicken memory))
 (import (chicken process-context))
 
-(define failures 0)
-
-(define (check label ok?)
-  (if ok?
-      (print "ok   - " label)
-      (begin
-        (print "FAIL - " label)
-        (set! failures (+ failures 1)))))
-
-;; A malloc'd, memcpy'd C buffer -- not a transient c-string -- standing
-;; in here for what (slibfyaml documents)'s document-parse-string will
-;; do for real in Phase 2 (see PLAN.md's "buffer-lifetime problem"
-;; section): fy_document_build_from_string keeps scalars as zero-copy
-;; spans into whatever buffer it's given, for the life of the document,
-;; so that buffer must outlive the document, not just the call.
-(define (c-malloc n) ((foreign-lambda c-pointer "malloc" size_t) n))
+;; c-malloc'd, memcpy'd C buffer -- not a transient c-string -- standing
+;; in here for what (slibfyaml documents)'s document-parse-string does
+;; for real (see PLAN.md's "buffer-lifetime problem" section):
+;; fy_document_build_from_string keeps scalars as zero-copy spans into
+;; whatever buffer it's given, for the life of the document, so that
+;; buffer must outlive the document, not just the call.
 
 (define yaml-text "hello: world\n")
 (define buf (c-malloc (string-length yaml-text)))
@@ -64,19 +54,14 @@
        (and value (pointer? value)))
 (check "value node is a scalar" (= 0 (fy_node_get_type value)))
 
-(define get-size_t (foreign-lambda* size_t ((c-pointer p)) "C_return(*(size_t *)p);"))
 (define lenp (c-malloc (foreign-type-size "size_t")))
 (define scalar-ptr (fy_node_get_scalar value lenp))
-(define scalar-len (get-size_t lenp))
-(define scalar-text (make-string scalar-len))
-(move-memory! scalar-ptr scalar-text scalar-len)
+(define scalar-len (size_t-ref lenp))
+(define scalar-text (decode-c-string scalar-ptr scalar-len))
+(c-free lenp)
 (check "scalar value round-trips as \"world\"" (string=? "world" scalar-text))
 
 (fy_document_destroy doc)
 (check "fy_document_destroy runs without crashing" #t)
 
-(print)
-(if (= 0 failures)
-    (print "All checks passed.")
-    (print failures " check(s) failed."))
-(exit (if (= 0 failures) 0 1))
+(check-summary-and-exit)

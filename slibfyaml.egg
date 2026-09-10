@@ -2,11 +2,28 @@
 ;;
 ;; slibfyaml.egg -- CHICKEN egg-information for slibfyaml.
 ;;
-;; Phase 1 (skeleton): only the (slibfyaml thin) raw FFI layer exists so
-;; far -- see PLAN.md's "Phased roadmap". Further extension components
-;; (slibfyaml, slibfyaml.nodes, slibfyaml.documents,
-;; slibfyaml.documents.streams, slibfyaml.scheme) are added as each is
+;; Phase 2 (read-only parse + navigate): (slibfyaml thin), (slibfyaml),
+;; (slibfyaml nodes), and (slibfyaml documents) exist -- see PLAN.md's
+;; "Phased roadmap". Further extension components
+;; (slibfyaml.documents.streams, slibfyaml.scheme) are added as each is
 ;; implemented, not declared speculatively ahead of the code existing.
+;;
+;; No explicit intra-egg dependency declaration between components is
+;; needed here, confirmed live by testing both ways: chicken-install
+;; builds every component as its own dynamically-loaded extension
+;; (.so), and a consuming program's `(import (slibfyaml documents))`
+;; resolves slibfyaml.documents' own internal requirement on
+;; slibfyaml.nodes/slibfyaml.thin/slibfyaml via the ordinary
+;; repository-based dynamic-load mechanism at runtime -- unlike the
+;; manual `csc -unit ... -uses ...`/static-.o inner-loop workflow in
+;; AGENTS.md's Build section, which does need `-uses` spelled out
+;; explicitly per compile, because static linking (not dynamic
+;; loading) is how that path resolves a module's own internal
+;; `(import ...)` forms. (A `component-dependencies` field was tried
+;; here first, on the assumption it would be required the same way
+;; `-uses` is manually -- rebuilding into a scratch prefix both with
+;; and without it produced an identical, working result either way,
+;; so it was removed rather than left in as unverified/probably-inert.)
 ;;
 ;; Link step: this machine's system libfyaml (`pkg-config --libs libfyaml`
 ;; reports plain "-lfyaml", no -L path needed -- confirmed directly) is
@@ -25,4 +42,12 @@
  (components
   (extension slibfyaml.thin
     (source "slibfyaml-thin.scm")
+    (link-options "-L" "-lfyaml"))
+  (extension slibfyaml
+    (source "slibfyaml.scm"))
+  (extension slibfyaml.nodes
+    (source "slibfyaml-nodes.scm")
+    (link-options "-L" "-lfyaml"))
+  (extension slibfyaml.documents
+    (source "slibfyaml-documents.scm")
     (link-options "-L" "-lfyaml"))))

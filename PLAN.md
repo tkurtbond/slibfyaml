@@ -359,33 +359,40 @@ buffer lifetime, `Insert_At` use-after-free) is exactly this class of
 mistake slipping past a documentation-only contract. CHICKEN can do
 better for a small, fixed cost, so it should.
 
-Design:
+Design, as actually implemented in Phase 2 (see its roadmap entry
+below for the one refinement this needed beyond the original sketch —
+`node`'s "owner" is a shared *liveness box*, not a reference to the
+`document` record itself, so `(slibfyaml nodes)` needs no dependency on
+`(slibfyaml documents)` at all, avoiding a two-way inter-module
+dependency CHICKEN's separately-compiled units can't express):
 
 ```scheme
-;; (slibfyaml documents), sketch
+;; (slibfyaml documents)
 (define-record-type document
-  (make-document handle owned-buffer live?)
+  (make-document-record handle owned-buffer liveness-box)
   document?
-  (handle       document-handle set-document-handle!)
-  (owned-buffer document-owned-buffer)
-  (live?        document-live? set-document-live?!))
+  (handle       document-handle)
+  (owned-buffer document-owned-buffer set-document-owned-buffer!)
+  (liveness-box document-liveness-box))   ; a (vector #t) or (vector #f)
 
-;; (slibfyaml nodes), sketch
+;; (slibfyaml nodes) -- imports (slibfyaml thin)/(slibfyaml), NOT
+;; (slibfyaml documents); owner-box is just the shared vector above,
+;; not a document record reference
 (define-record-type node
-  (make-node handle owner)         ; owner: the document this node's
-  node?                            ; validity is tied to, or #f for
-  (handle handle-of)               ; null-node / not-yet-attached
-  (owner  node-owner))             ; freshly-built nodes (see below)
+  (make-node handle owner-box)
+  node?
+  (handle handle)
+  (owner-box owner-box))
 ```
 
 - Every accessor in `(slibfyaml nodes)` starts by calling a shared
   `(check-node-live! n)` helper: raises `(exn slibfyaml use-after-free)`
-  if `(node-owner n)` is truthy and `(document-live? (node-owner n))`
-  is `#f`. `null-node` and any node with no owner (see below) skip the
+  if `(node-owner-box n)` is truthy and its first slot is `#f`.
+  `null-node` and any node with no owner box (see below) skip the
   liveness check and fall through to the existing `Is_Valid`-equivalent
   null-handle check instead — the two checks are independent, not
   layered.
-- `document-destroy!` sets `live? → #f` on its record *before* calling
+- `document-destroy!` sets the box's slot to `#f` *before* calling
   `fy_document_destroy`, so a `node` accessor racing a concurrent
   destroy (not a real concern without threads, but cheap to get right)
   never observes a half-torn-down state.
@@ -405,11 +412,11 @@ Design:
   "you already handed this specific node to Insert_At" are different
   mistakes with different fixes, even though both are caught by a
   guard at the top of every accessor.
-- Cost: one extra field on `node` (a reference to its owning
-  `document`, not a copy of the live-flag — reading through the
-  reference means one flag flip in `document-destroy!` invalidates
-  every `node` drawn from that document at once) and one branch per
-  accessor call. Negligible next to the FFI call itself.
+- Cost: one extra field on `node` (a reference to the shared liveness
+  box, not a copy of its boolean content — reading through the shared
+  box means one flip in `document-destroy!` invalidates every `node`
+  drawn from that document at once) and one branch per accessor call.
+  Negligible next to the FFI call itself.
 - This is strictly more defensive than `alibfyaml`'s Ada contract
   (which relies on `-gnata` preconditions checking `Is_Valid` — a
   null-handle check only, never a "my owner is gone" check). Revisit
@@ -924,12 +931,48 @@ before writing the first test file):
    the original pointer a caller-owned result would need to pass to
    `c-free`). See `slibfyaml-thin.scm`'s own header comment and
    AGENTS.md's Conventions section.
-2. **Read-only parse + navigate**: `document-parse-string`/
+2. **`[done]` Read-only parse + navigate**: `document-parse-string`/
    `-parse-file` (with the copy-always buffer strategy from day one,
    not retrofitted), `document-root`, `node-kind`/predicates,
    `node-scalar-value`, `node-length`/`node-item`, `node-value`/
    `node-has-key?`, `node-iterate-items`/`node-iterate-pairs`, `node-by-path`/
-   `node-path`. Enough to port `test-quickstart` and `test-navigate`.
+   `node-path`. `test-quickstart`/`test-navigate` ported (using
+   `alibfyaml`'s own `config.yaml`/`navigate.yaml` fixtures directly),
+   passing and confirmed leak/error-free under valgrind under both
+   CHICKEN 5.4.0 and 6.0.0.
+
+   Also delivered, ahead of where the roadmap originally placed them,
+   because `document-parse-string` can't raise a real parse failure
+   without them: the `parse` and `use-after-free` condition kinds from
+   Error handling (not the whole set -- `missing-key`/`data`/`resolve`/
+   `emit`/`consumed` still wait for the phases that actually introduce
+   the operations that raise them, same "bind exactly what's needed"
+   discipline already applied to the C function surface). Both
+   exercised directly in `test-quickstart.scm` (a deliberately
+   malformed parse, and a node accessor called after its document was
+   destroyed), not just unit-tested in isolation.
+
+   One implementation-time refinement to the Memory model's `node`
+   sketch: `node`'s `owner` field turned out to need to be a shared
+   *liveness box* (a one-element mutable vector, flipped by
+   `document-destroy!`), not a reference to the actual `document`
+   record as originally sketched -- `(slibfyaml nodes)` needs no
+   dependency on `(slibfyaml documents)` at all this way, which matters
+   because `(slibfyaml documents)` already has to depend on
+   `(slibfyaml nodes)` (to wrap `fy_document_root`'s result), and
+   CHICKEN modules compiled as separate units can't depend on each
+   other in both directions. See `slibfyaml-nodes.scm`'s own header
+   comment for the full reasoning.
+
+   Also found live, not assumed: `chicken-install` needs no intra-egg
+   `component-dependencies`-style declaration between `slibfyaml.egg`'s
+   components (tried it, then removed it after confirming an identical
+   working result without it) -- unlike the manual `csc -uses` inner
+   loop, which does need each module's real dependencies declared *at
+   that module's own compile step*, not just the final program's. See
+   AGENTS.md's Build section for the full writeup, including the
+   separate `CHICKEN_REPOSITORY_PATH`-replaces-rather-than-extends
+   gotcha found while verifying this against a real installed egg.
 3. **Typed scalars**: the full `node-integer-value`/etc. family, core
    schema + the two extensions, `test-scalars` exhaustive coverage.
 4. **Build + emit + mutate**: `document-create-*`, `document-set-root!`,

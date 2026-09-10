@@ -112,10 +112,22 @@
    ;; reason alibfyaml's Libfyaml.Thin names its own binding `C_Free`
    ;; rather than `Free`.
    c-free
+
+   ;; Small, mechanical C-interop helpers shared by every module built on
+   ;; top of this one -- not libfyaml-specific, but colocated here rather
+   ;; than duplicated once in (slibfyaml nodes) and again in (slibfyaml
+   ;; documents), since both need exactly these few operations to work
+   ;; with the c-pointer/size_t values this module's own functions return.
+   c-malloc
+   size_t-ref
+   make-pointer-cell
+   decode-c-string
+   nul-terminated-c-string-at
    )
 
 (import scheme)
 (import (chicken foreign))
+(import (chicken memory))
 
 (foreign-declare "#include <libfyaml.h>")
 
@@ -315,5 +327,48 @@
 
 (define c-free
   (foreign-lambda void "free" c-pointer))
+
+;;;; Shared C-interop helpers
+
+(define c-malloc
+  (foreign-lambda c-pointer "malloc" size_t))
+
+(define size_t-ref
+  (foreign-lambda* size_t ((c-pointer p)) "C_return(*(size_t *)p);"))
+;; Reads back the size_t an out-parameter pointer (fy_node_get_scalar's
+;; or fy_node_get_tag's `lenp`) was filled in with. The pointer itself
+;; is just c-malloc'd by the caller beforehand and freed afterward --
+;; nothing here owns it.
+
+(define make-pointer-cell
+  (foreign-lambda* c-pointer () "void **c = malloc(sizeof(void *)); *c = NULL; C_return(c);"))
+;; A malloc'd, zero-initialized `void *` cell, sized and aligned
+;; correctly by the C compiler rather than assumed -- the `prevp`
+;; iterator-cookie argument fy_node_sequence_iterate/
+;; fy_node_mapping_iterate/fy_diag_errors_iterate all take. Freed with
+;; c-free once an iteration loop is done with it; must NOT be reused
+;; between separate iterations of the same or a different node -- a
+;; fresh cell per iteration is required, exactly as libfyaml's own
+;; header documents for these `prevp`-style iterators.
+
+(define decode-c-string
+  (lambda (ptr len) (let ((s (make-string len))) (move-memory! ptr s len) s)))
+;; For a c-pointer + explicit length that is NOT necessarily
+;; NUL-terminated at that length (fy_node_get_scalar/fy_node_get_tag's
+;; zero-copy spans back into source text) -- move-memory! copies
+;; exactly `len` bytes, unlike a NUL-terminated-string conversion,
+;; which would either stop early or read past the intended span. Same
+;; idiom the existing `yaml` egg's own `scalar-value` already uses
+;; against real libyaml event data.
+
+(define nul-terminated-c-string-at
+  (foreign-lambda* c-string ((c-pointer p)) "C_return(p);"))
+;; For a c-pointer already known to be a proper NUL-terminated C
+;; string built by libfyaml itself (fy_node_get_path's result, a diag
+;; error's `msg`/`file` fields) rather than a source-text span --
+;; safe to let CHICKEN's ordinary c-string marshaling scan for the
+;; NUL here specifically because that assumption holds. Does not free
+;; the original pointer -- ownership (and whether it must be freed at
+;; all) is the caller's own to track, same as decode-c-string above.
 
 ) ;; module
