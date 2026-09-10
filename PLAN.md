@@ -30,6 +30,16 @@ shape to Chicken: same handle-over-a-C-owned-tree model, same function
 surface, same typed-scalar resolution against YAML 1.2's core schema —
 adapted for a garbage-collected host with no RAII.
 
+`slibfyaml` also needs the other eggs' "just give me plain Scheme data"
+entry point — not everyone navigating a config file wants to hold a
+`document` open and walk `node` handles — but without `yaml-load`'s
+single-document limitation. Since the handle/tree core can already
+decode any node (whole document or not), and multi-document streaming
+is already part of the plan, the value-materializing API in this egg is
+a thin convenience layer built *on top of* the handle-based core rather
+than a second, independent parser — see "Value-materializing convenience
+API" below.
+
 ## Design goals
 
 - Match `alibfyaml`'s API shape and scope closely enough that someone
@@ -51,6 +61,15 @@ adapted for a garbage-collected host with no RAII.
   buffer-lifetime story around that from the start, rather than
   discovering the equivalent of `alibfyaml`'s `Document_Stream`
   buffer-lifetime bug (see its PLAN.md) after the fact.
+- Offer a value-materializing API — plain nested Scheme data, no
+  `document`/`node` handles to manage — as a first-class *convenience
+  layer*, not a second implementation: it must reuse the handle-based
+  core's parsing, typed-scalar resolution, and multi-document
+  streaming rather than duplicating any of them. This is the one part
+  of the design that goes beyond matching `alibfyaml` — it exists to
+  match and then exceed the two existing Chicken eggs' own core
+  feature (decode to Scheme data), specifically fixing `yaml` egg's
+  single-document-only limitation.
 
 ## Scope: same exclusions as `alibfyaml`
 
@@ -96,24 +115,29 @@ library exports it (unlikely to diverge, but cheap to check).
 
 ## Naming
 
+**Decided**: egg name and Scheme module family are both `slibfyaml` (no
+separate short module name) — the `(import (slibfyaml nodes))`-length
+tradeoff considered above is worth it for never having two names (egg
+vs. module) to keep straight, and for staying unambiguous next to the
+existing, oddly-named `libyaml` egg (which also binds libfyaml, despite
+its name) and the real-libyaml-binding `yaml` egg.
+
 - Egg name: `slibfyaml` (matches this repository).
 - Scheme module family, mirroring `alibfyaml`'s child-package layout via
   CHICKEN 5's list-style module names (the same mechanism the existing
   `libyaml` egg uses for its own `(libfyaml yaml2ss)` /
   `(libfyaml if)` submodules):
-  - `(fyaml thin)` — raw FFI imports (≈ `Libfyaml.Thin`)
-  - `(fyaml)` — condition types (≈ top-level `Libfyaml`)
-  - `(fyaml nodes)` — `node` (≈ `Libfyaml.Nodes`)
-  - `(fyaml documents)` — `document` (≈ `Libfyaml.Documents`)
-  - `(fyaml documents streams)` — multi-document streaming
+  - `(slibfyaml thin)` — raw FFI imports (≈ `Libfyaml.Thin`)
+  - `(slibfyaml)` — condition types (≈ top-level `Libfyaml`)
+  - `(slibfyaml nodes)` — `node` (≈ `Libfyaml.Nodes`)
+  - `(slibfyaml documents)` — `document` (≈ `Libfyaml.Documents`)
+  - `(slibfyaml documents streams)` — multi-document streaming
     (≈ `Libfyaml.Documents.Streams`)
+  - `(slibfyaml scheme)` — the value-materializing convenience API (see
+    below), decoding a `document`/`node` into plain Scheme data
 - Deliberately *not* named `libfyaml` or `libyaml` as a Scheme module,
   to avoid any confusion with the existing (differently-scoped, oddly-
   named) `libyaml` egg that also binds libfyaml.
-- Open question: is `fyaml` too easy to misread as `yaml`? Alternative:
-  `slibfyaml` itself as the top module name, at the cost of a longer
-  `(import (slibfyaml nodes))` everywhere. Leaning toward `fyaml` —
-  flag for confirmation before writing code.
 
 ## C function surface
 
@@ -153,7 +177,7 @@ header above:
 Same constraint Ada hit applies identically in CHICKEN: `fy_node_is_scalar`
 / `_is_sequence` / `_is_mapping` / `_is_alias` are `static inline` header
 wrappers, not exported symbols — `foreign-lambda` can't bind them any
-more than `pragma Import` could. Reimplement them in `(fyaml nodes)` by
+more than `pragma Import` could. Reimplement them in `(slibfyaml nodes)` by
 comparing `fy_node_get_type`'s result, exactly as `alibfyaml` does.
 
 ## Struct field access: prefer inline C snippets over hand-mirrored structs
@@ -189,9 +213,9 @@ by pinning to a specific header snapshot.
 | Ada (`alibfyaml`) | Chicken (`slibfyaml`) |
 |---|---|
 | `type Node is tagged private` wrapping `Thin.Fy_Node` | `(define-record-type node (make-node handle) node? (handle node-handle))` wrapping a raw `c-pointer` |
-| `Null_Node : constant Node` | `fyaml-null-node` (a distinguished `node` wrapping a null pointer) |
+| `Null_Node : constant Node` | `null-node` (a distinguished `node` wrapping a null pointer) |
 | `type Document is tagged limited private` (RAII, `Ada.Finalization.Limited_Controlled`) | `(define-record-type document ...)` wrapping the `Fy_Document` pointer + owned-buffer state; see Memory model below for how "RAII" is approximated |
-| `Wrap`/`Raw` bridge functions (binding-internal) | Same idea: `node-wrap`/`node-raw`, `document-wrap`/`document-raw`, exported only from `(fyaml nodes)`/`(fyaml documents)` for `(fyaml documents streams)` to use, not part of the public API |
+| `Wrap`/`Raw` bridge functions (binding-internal) | Same idea: `node-wrap`/`node-raw`, `document-wrap`/`document-raw`, exported only from `(slibfyaml nodes)`/`(slibfyaml documents)` for `(slibfyaml documents streams)` to use, not part of the public API |
 | Overloaded `Integer_Value`/`Long_Integer_Value`/`Long_Long_Integer_Value` | **Collapses to one `node-integer-value`.** CHICKEN's numeric tower auto-promotes to bignums; there is no fixed-width integer type a caller needs to pre-choose the way Ada's static typing forces. Same collapse for `Float_Value`/`Long_Float_Value` → one `node-float-value` (CHICKEN flonums are IEEE double already, matching Ada's `Long_Float`, so nothing is lost). This is a genuine simplification over the Ada API, not a gap. |
 | `Node_Kind` enum (`Scalar_Node`, `Sequence_Node`, `Mapping_Node`) | `(node-kind n)` returns a symbol: `'scalar`, `'sequence`, `'mapping` |
 | `Node_Location` record (`Line`, `Column`) | Two values via `(node-location n)` → `(values line column)`, or a simple pair — decide during implementation; leaning toward two `values` to avoid allocating a throwaway record for something read once per error site |
@@ -227,7 +251,7 @@ used together:
    `call-with-input-file`, e.g.:
 
    ```scheme
-   (with-document (doc (fyaml-parse-file "config.yaml"))
+   (with-document (doc (document-parse-file "config.yaml"))
      (node-value (document-root doc) "server"))
    ```
 
@@ -251,7 +275,7 @@ each `document` record a mutable "live?" flag, and have every `node`
 record carry a reference back to the `document` it came from (not just
 the raw pointer). `node` accessors can then check
 `(document-live? owning-doc)` before touching the raw handle and raise
-a clear condition (`(exn fyaml use-after-free)`, or similar) instead of
+a clear condition (`(exn slibfyaml use-after-free)`, or similar) instead of
 segfaulting or reading freed memory on a use-after-destroy. This is
 strictly more defensive than `alibfyaml`'s Ada contract (which relies
 on `-gnata` preconditions checking `Is_Valid` — null-check only, not a
@@ -342,18 +366,18 @@ Chicken condition types, matching the five Ada exceptions and the
 condition-tagging convention already used by the two existing Chicken
 YAML eggs (`(exn <lib> <procedure>)`-style composite kinds):
 
-- `(exn fyaml parse)` — parse failure. Message formatted the same
+- `(exn slibfyaml parse)` — parse failure. Message formatted the same
   gcc-style way `alibfyaml`'s `Parse_Error` is
   (`file:line:column: error: message`, one line per collected
   diagnostic, via `fy_diag_errors_iterate`), a format `alibfyaml`
   arrived at deliberately (see its PLAN.md, "Parse_Error message
   reformatted to gcc diagnostic style") — no reason to make a
   different choice here.
-- `(exn fyaml emit)` — emit failure.
-- `(exn fyaml missing-key)` — required mapping key absent.
-- `(exn fyaml data)` — scalar present but not resolvable as the
+- `(exn slibfyaml emit)` — emit failure.
+- `(exn slibfyaml missing-key)` — required mapping key absent.
+- `(exn slibfyaml data)` — scalar present but not resolvable as the
   requested typed-accessor's type.
-- `(exn fyaml resolve)` — `document-resolve!` failure (e.g. a
+- `(exn slibfyaml resolve)` — `document-resolve!` failure (e.g. a
   merge-key cycle). Same caveat `alibfyaml` documents: libfyaml doesn't
   say how much resolved before failing, so treat the document as
   unreliable afterward, not as cleanly rolled back.
@@ -388,7 +412,7 @@ Accessors, collapsing Ada's per-width overload sets as noted above:
 
 - `node-integer-value`, `node-float-value`, `node-boolean-value`,
   `node-string-value` (≈ `Scalar_Value`, just named for consistency
-  with the typed family) — raise `(exn fyaml data)` on a mismatch.
+  with the typed family) — raise `(exn slibfyaml data)` on a mismatch.
 - `node-integer?`, `node-float?`, `node-boolean?` — non-raising shape
   predicates, same purpose as Ada's (deciding a scalar's shape before
   committing to a conversion).
@@ -396,7 +420,7 @@ Accessors, collapsing Ada's per-width overload sets as noted above:
   `(node-integer-value map key default)` and the same pattern for
   `float`/`boolean`/`string`, using CHICKEN's `#!optional` rather than
   Ada's required-vs-optional overload pair. Required form raises
-  `(exn fyaml missing-key)` if absent, `(exn fyaml data)` if present
+  `(exn slibfyaml missing-key)` if absent, `(exn slibfyaml data)` if present
   but malformed; supplying `default` only substitutes for absence, per
   `alibfyaml`'s explicit design rule that a default must never mask a
   malformed value.
@@ -407,7 +431,7 @@ Organized the same way `alibfyaml`'s `Libfyaml.Nodes`/`Libfyaml.Documents`
 are; exact signatures to firm up during implementation, not frozen here.
 
 ```scheme
-;; (fyaml documents)
+;; (slibfyaml documents)
 (document-parse-string string #!optional (resolve-anchors? #t))
 (document-parse-file path #!optional (resolve-anchors? #t))
 (document-resolve! doc)
@@ -422,8 +446,8 @@ are; exact signatures to firm up during implementation, not frozen here.
 (document-destroy! doc)                  ; explicit, idempotent
 (with-document (doc expr) body ...)      ; dynamic-wind combinator
 
-;; (fyaml nodes)
-(node-valid? n) (fyaml-null-node)
+;; (slibfyaml nodes)
+(node-valid? n) (null-node)
 (node-kind n)                            ; 'scalar | 'sequence | 'mapping
 (node-scalar? n) (node-sequence? n) (node-mapping? n)
 (node-null-value? n)
@@ -443,11 +467,16 @@ are; exact signatures to firm up during implementation, not frozen here.
 (node-by-path n path) (node-path n)
 (node-alias? n) (node-tag n)
 
-;; (fyaml documents streams)
+;; (slibfyaml documents streams)
 (document-stream-open-string string)
 (document-stream-open-file path)
 (document-stream-has-next? stream)
 (document-stream-next! stream)           ; -> document
+
+;; (slibfyaml scheme)
+(node->scheme n)                         ; -> plain Scheme data, any node
+(load-string string #!optional (resolve-anchors? #t))  ; -> list of values
+(load-file path #!optional (resolve-anchors? #t))      ; -> list of values
 ```
 
 `node-iterate` overloading on sequence-vs-mapping via a single name
@@ -472,7 +501,7 @@ finding that **a stream does not recover from a parse error**:
 libfyaml's streaming parser cannot resync past a malformed document to
 reach further ones in the same stream, confirmed against libfyaml
 directly including that an explicit parser reset does not restore
-usable input state. After a `(exn fyaml parse)` from
+usable input state. After a `(exn slibfyaml parse)` from
 `document-stream-next!`, treat the stream as exhausted:
 `document-stream-has-next?` should report a clean `#f` rather than
 raising again, even though the underlying input may textually contain
@@ -480,6 +509,104 @@ more documents after the malformed one. (Ada's own binding got this
 wrong once — raising `Libfyaml.Parse_Error` a second time, quoting the
 first error's now-stale message — before fixing it; no reason to
 re-introduce that bug here by not planning for it up front.)
+
+## Value-materializing convenience API: `(slibfyaml scheme)`
+
+The requirement this section plans for: an entry point that returns
+plain Scheme data the way `yaml` egg's `yaml-load` and `libyaml` egg's
+`yaml->ss` do, but that can read every document in a multi-document
+stream, not just the first — fixing `yaml` egg's actual limitation
+(`yaml-load` collapses its parse seed to `(car seed)` on
+`document-end`, so it can only ever return the first document) without
+inheriting `libyaml` egg's awkward fix for the same problem (its
+`yaml->ss` returns a *callable* you invoke with a document index or
+`-1` for "all of them," rather than just handing back the data).
+
+### Design: a decoder over the handle-based core, not a separate parser
+
+This is the reason the handle/tree core comes first in the roadmap
+rather than being built in parallel: `(slibfyaml scheme)` is a pure
+consumer of it, adding no new C calls of its own.
+
+- **`(node->scheme n)`** — the core primitive. Recursively decodes any
+  `node` (not just a document root — a genuine advantage of building
+  this on the handle-based core, since neither existing egg's decoder
+  can be pointed at a sub-tree) into plain Scheme data:
+  - mapping → alist: `(list (cons key-value value-value) ...)`, keys
+    and values themselves decoded recursively via `node->scheme`
+  - sequence → list: `(list item-value ...)`
+  - scalar → whichever of `(node-integer-value n)`,
+    `(node-float-value n)`, `(node-boolean-value n)`, `'()` (null), or
+    `(node-string-value n)` actually matches, using the *same* typed
+    predicates the handle-based core already implements against YAML
+    1.2 core schema (plus its two documented extensions) — this is
+    strictly more rigorous than `yaml` egg's ad hoc regex cascade or
+    `libyaml` egg's separate regex-based `scalar->ss`, and costs
+    nothing extra to get since the typed accessors already exist for
+    the handle-based API.
+  - Because the shape (mapping vs. sequence) is always known from
+    libfyaml's own `node-kind` while decoding, **this direction has
+    none of `yaml` egg's mapping/sequence ambiguity** — that ambiguity
+    only bites `yaml` egg's *emitter*, which has to guess a Scheme
+    value's intended YAML shape from its structure alone (is this list
+    of pairs a mapping or a sequence of dotted pairs?). A pure decoder
+    never has to guess.
+  - Anchors/aliases need no special handling in the walker at all: by
+    the time `node->scheme` sees a node, `document-resolve!` (default
+    `#t` on parse, per the handle-based core's `resolve-anchors?`) has
+    already replaced every alias with its resolved content — unlike
+    `yaml` egg, which has to hand-roll an anchor hash-table during
+    event parsing to get the same result.
+- **`(load-string string #!optional (resolve-anchors? #t))`** and
+  **`(load-file path #!optional (resolve-anchors? #t))`** — the actual
+  multi-document entry points. Internally: open a
+  `(slibfyaml documents streams)` `document-stream` over the input,
+  pull every document with `document-stream-has-next?`/
+  `document-stream-next!`, `node->scheme` each one's root, destroy each
+  `document` once decoded (nothing from the tree needs to survive past
+  decoding — the whole point of this API is that the caller never
+  touches a `document`/`node` at all), and **always return a list of
+  decoded documents**, even for single-document input (a length-1
+  list) — no thunk, no index argument, no `-1` sentinel. This is a
+  deliberate departure from `libyaml` egg's `yaml->ss` shape: returning
+  the callable-you-invoke-with-an-index design was already flagged (in
+  this project's earlier sibling-comparison note) as an awkward extra
+  indirection for the common case; a plain list has none of that, and
+  `(car (load-string ...))` is exactly as short as `libyaml` egg's
+  `((yaml->ss ...))` for the single-document case anyway.
+- No `load-string-first`/`load-file-first` convenience wrapper planned
+  up front — `(car (load-string ...))` is short enough that a separate
+  name would just be one more thing to keep in sync with `load-string`
+  itself; add one later only if real call sites show it's actually
+  wanted.
+
+### Explicitly not planned (for now): the inverse direction
+
+An `alist`/`list` decode has no ambiguity (see above), but a
+**Scheme-data-to-YAML *encoder*** built the same way `yaml` egg's
+`yaml-dump`/`walk-objects` is — guessing mapping-vs-sequence from a
+plain Scheme value's shape — would inherit exactly the ambiguity `yaml`
+egg has (a sequence whose first element happens to be a non-list pair
+misdumps as a mapping), since libfyaml's own `document-create-*`/
+`node-append!`/`node-append-pair!` calls need to be told which kind of
+node to build and a plain nested list/alist alone doesn't always say.
+Two options if this is wanted later, deliberately deferred rather than
+decided now:
+
+1. Accept the same ambiguity `yaml` egg lives with (alist-of-pairs vs.
+   list, same heuristic).
+2. Adopt `libyaml` egg's disambiguating convention instead — mapping as
+   a one-element list wrapping an alist, sequence as a vector — which
+   resolves the ambiguity outright at the cost of not looking like
+   `yaml` egg's shape on the way in.
+
+Since the immediate ask is decoding (matching `yaml` egg's read side,
+fixing its multi-document gap), building an encoder is out of scope
+for the phase this plan currently covers. The handle-based core's own
+`document-create-*`/`node-append!`/`node-append-pair!` (Phase 4)
+already cover "build a document programmatically" for anyone who wants
+to construct one explicitly, node by node, with no ambiguity — that
+need not wait on a Scheme-data encoder existing at all.
 
 ## Testing plan
 
@@ -499,6 +626,12 @@ before writing the first test file):
   `test-mutate` (`document-insert-at!`'s success and failure
   outcomes for the node passed in), `test-anchors`, `test-parse-errors`,
   `test-location`, `test-path`.
+- `test-scheme` — `(slibfyaml scheme)` coverage: single- and
+  multi-document `load-string`/`load-file` (asserting a list is always
+  returned, length matching document count), `node->scheme` on a
+  sub-tree (not just a document root), typed-scalar decoding for every
+  case `test-scalars` already covers, and a document containing
+  anchors/aliases decoded with `resolve-anchors?` both `#t` and `#f`.
 - **Run anything touching document/node lifetime under valgrind**
   before considering it done — not optional polish, per `alibfyaml`'s
   own experience that every real lifetime bug it found surfaced as a
@@ -516,9 +649,9 @@ before writing the first test file):
 ## Build/packaging
 
 - `slibfyaml.egg` — CHICKEN 5 egg-information format, `extension`
-  component(s) for `fyaml`/`fyaml.thin`/`fyaml.nodes`/
-  `fyaml.documents`/`fyaml.documents.streams`, linking via
-  `pkg-config libfyaml` (mirroring how other C-binding eggs in the
+  component(s) for `slibfyaml`/`slibfyaml.thin`/`slibfyaml.nodes`/
+  `slibfyaml.documents`/`slibfyaml.documents.streams`/`slibfyaml.scheme`,
+  linking via `pkg-config libfyaml` (mirroring how other C-binding eggs in the
   CHICKEN ecosystem express link flags — confirm exact `.egg`
   csc-options syntax against a recent binding egg before writing this,
   rather than guessing).
@@ -527,20 +660,12 @@ before writing the first test file):
 
 ## Open questions
 
-- Module naming: `(fyaml ...)` vs. `(slibfyaml ...)` — see Naming
-  above.
 - License: `alibfyaml` currently has none chosen either; the two
   existing Chicken YAML eggs are BSD-style (`yaml`) and MIT
   (`libyaml`). Pick one before the first public release, doesn't block
   design/implementation.
 - `node-iterate` naming split (single overloaded name vs.
   `node-iterate-items`/`node-iterate-pairs`) — see API surface sketch.
-- Whether to also offer an optional "materialize to plain Scheme data"
-  convenience layer on top of the handle-based core (bridging back
-  toward the `yaml`/`libyaml` eggs' value-based style for callers who
-  just want a config file as an alist) — worth doing once the core is
-  solid, but explicitly **not** a Phase 1 goal; the whole point of this
-  egg is the handle/tree model the other two eggs don't offer.
 - Whether `document-live?`/owner-tracking on every `node` (the extra
   defensiveness beyond what `alibfyaml`'s Ada contract provides,
   described in Memory model above) is worth its complexity once real
@@ -553,7 +678,7 @@ before writing the first test file):
 
 ## Phased roadmap
 
-1. **Skeleton**: `.egg` file, `(fyaml thin)` with the full confirmed
+1. **Skeleton**: `.egg` file, `(slibfyaml thin)` with the full confirmed
    C function list bound (no logic yet), builds and links against
    system `pkg-config libfyaml`.
 2. **Read-only parse + navigate**: `document-parse-string`/
@@ -570,13 +695,16 @@ before writing the first test file):
    `-write-to-file!`. `test-mutate`.
 5. **Anchors/resolve**: `document-resolve!`, `node-alias?`, `node-tag`,
    `resolve-anchors?` on parse. `test-anchors`.
-6. **Multi-document streaming**: `(fyaml documents streams)`, the
+6. **Multi-document streaming**: `(slibfyaml documents streams)`, the
    no-recovery-after-parse-error behavior, buffer-sharing via the
    refcounted-copy design. `test-streams`, `test-buffer-lifetime`.
-7. **Diagnostics polish**: gcc-style `Parse_Error` formatting,
+7. **Value-materializing API**: `(slibfyaml scheme)` — `node->scheme`,
+   `load-string`/`load-file`, built on phases 2/3/6 above (needs typed
+   scalars and streaming already in place). `test-scheme`.
+8. **Diagnostics polish**: gcc-style `Parse_Error` formatting,
    `node-location`/`node-has-location?`, `test-parse-errors`/
    `test-location`.
-8. **Packaging**: finalize `.egg` metadata, license, README examples
+9. **Packaging**: finalize `.egg` metadata, license, README examples
    matching the finished API, submit to CHICKEN's egg index if
    desired.
 

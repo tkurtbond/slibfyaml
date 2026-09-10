@@ -40,18 +40,35 @@ Scheme's GC instead of Ada's RAII. See `PLAN.md` for the full rationale
 and the memory-safety issues this tradeoff raises in a garbage-collected
 host.
 
+## Also: plain Scheme data, like `yaml`/`libyaml`, but multi-document
+
+Handles aren't always wanted — sometimes you just want a config file as
+an alist. `(slibfyaml scheme)` decodes a document (or any `node`) into
+plain Scheme data the same shape `yaml` egg's `yaml-load` returns
+(mapping → alist, sequence → list, scalar → resolved value), but
+`load-string`/`load-file` always return a **list of decoded documents**
+— fixing `yaml-load`'s actual limitation (it can only ever return the
+first document of a multi-document stream) without `libyaml` egg's
+awkward fix for the same gap (its `yaml->ss` hands back a callable you
+invoke with a document index, rather than the data itself). This layer
+is a pure consumer of the handle-based core below it — no separate
+parser, no separate typed-scalar logic. See PLAN.md's
+"Value-materializing convenience API" section for the full design.
+
 ## Layout (planned)
 
-- `fyaml-thin.scm` — low-level 1:1 `foreign-lambda` imports over
+- `slibfyaml-thin.scm` — low-level 1:1 `foreign-lambda` imports over
   libfyaml's exported C symbols. No ownership or error-checking policy.
-- `fyaml.scm` — condition types (`parse`, `emit`, `missing-key`, `data`,
-  `resolve`).
-- `fyaml-nodes.scm` — `node`: a cheap, non-owning handle onto a tree
-  node.
-- `fyaml-documents.scm` — `document`: the owner of a parsed or
+- `slibfyaml.scm` — condition types (`parse`, `emit`, `missing-key`,
+  `data`, `resolve`).
+- `slibfyaml-nodes.scm` — `node`: a cheap, non-owning handle onto a
+  tree node.
+- `slibfyaml-documents.scm` — `document`: the owner of a parsed or
   freshly-built tree, with explicit `document-destroy!` plus a
   GC finalizer as a backstop.
-- `fyaml-documents-streams.scm` — multi-document YAML streams.
+- `slibfyaml-documents-streams.scm` — multi-document YAML streams.
+- `slibfyaml-scheme.scm` — the value-materializing convenience API
+  (`node->scheme`, `load-string`, `load-file`).
 - `tests/` — one test file per concern, ported from `alibfyaml`'s test
   suite where the same case applies.
 - `PLAN.md` — design rationale, decisions, and open questions.
