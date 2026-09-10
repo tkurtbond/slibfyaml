@@ -2,4 +2,6 @@
 *.o
 *.link
 *.import.scm
+*.build.sh
+*.install.sh
 .chicken-install/

@@ -1,0 +1,28 @@
+;; -*- scheme -*-
+;;
+;; slibfyaml.egg -- CHICKEN egg-information for slibfyaml.
+;;
+;; Phase 1 (skeleton): only the (slibfyaml thin) raw FFI layer exists so
+;; far -- see PLAN.md's "Phased roadmap". Further extension components
+;; (slibfyaml, slibfyaml.nodes, slibfyaml.documents,
+;; slibfyaml.documents.streams, slibfyaml.scheme) are added as each is
+;; implemented, not declared speculatively ahead of the code existing.
+;;
+;; Link step: this machine's system libfyaml (`pkg-config --libs libfyaml`
+;; reports plain "-lfyaml", no -L path needed -- confirmed directly) is
+;; hard-coded as "-L" "-lfyaml" below rather than shelling out to
+;; pkg-config via custom-config. See PLAN.md's "Build/packaging" section
+;; for the custom-config alternative to investigate if a future machine
+;; needs a non-standard libfyaml location.
+
+((synopsis "Handle/tree binding to libfyaml (YAML 1.2 core-schema parser/emitter/document API), alibfyaml's Ada design ported to CHICKEN Scheme")
+ (author "Thomas Kurt Bond")
+ (category ffi)
+ (license "BSD-2-Clause")
+ (dependencies (chicken "5.4.0"))
+ (foreign-dependencies "libfyaml -- https://github.com/pantoniou/libfyaml (developed against the system package reporting version 0.8 but exposing the 1.0-beta1 API; see PLAN.md's \"Target libfyaml version\" section)")
+
+ (components
+  (extension slibfyaml.thin
+    (source "slibfyaml-thin.scm")
+    (link-options "-L" "-lfyaml"))))

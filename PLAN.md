@@ -882,14 +882,48 @@ before writing the first test file):
 
 ## Phased roadmap
 
-1. **Skeleton**: `.egg` file, `(slibfyaml thin)` with the full confirmed
-   C function list bound (no logic yet), builds and links against
-   system `pkg-config libfyaml` under both
-   `/usr/local/sw/versions/chicken/5.4.0` and `.../6.0.0` — establish
-   the dual-version build/test habit here, not later. Also the point
-   at which to resolve the two "not yet checked" CHICKEN 6 items above
-   (egg-index absence of a prior YAML egg, exact `.egg`/egg-information
-   requirements for 6).
+1. **`[done]` Skeleton**: `.egg` file, `(slibfyaml thin)` with the full
+   confirmed C function list bound (no logic yet), builds and links
+   against system `pkg-config libfyaml` under both
+   `/usr/local/sw/versions/chicken/5.4.0` and `.../6.0.0`.
+
+   Confirmed live, resolving both "not yet checked" CHICKEN 6 items
+   from "Target CHICKEN version(s)" above: `slibfyaml.egg`'s
+   `(extension slibfyaml.thin (source "slibfyaml-thin.scm")
+   (link-options "-L" "-lfyaml"))` builds, installs, and imports
+   identically under both CHICKEN versions via real `chicken-install`
+   runs into isolated scratch prefixes (`CHICKEN_INSTALL_PREFIX=...
+   chicken-install`, then `csi` against
+   `CHICKEN_REPOSITORY_PATH=$PREFIX/lib/chicken/<N>` — `<N>` is `11`
+   for 5.4.0, `12` for 6.0.0 on this machine) — no CHICKEN-6-specific
+   `.egg` field or divergence needed. `tests/test-thin.scm` (parse
+   `"hello: world"`, walk root → mapping → scalar, read the value back
+   byte-for-byte via `move-memory!`, destroy) passes identically under
+   both versions and is confirmed leak/error-free under valgrind.
+
+   Two mechanics needed to get a list-form-named module
+   (`(module (slibfyaml thin) ...)`) to build and link as a separate
+   unit at all, found by trial rather than documented anywhere obvious
+   (see AGENTS.md's Build section for the exact commands): `-unit
+   slibfyaml-thin` when compiling the module (otherwise it emits its
+   own `main`/`C_toplevel` and collides with whatever links against
+   it), and `-J`/`-emit-all-import-libraries` (otherwise no
+   `.import.scm` is emitted at all and nothing can `(import (slibfyaml
+   thin))` it). `chicken-install` itself gets both right automatically
+   from the `.egg` file's `extension` declaration — only the manual
+   `csc`-only inner-loop workflow needs them spelled out.
+
+   One deliberate, load-bearing typing decision confirmed necessary
+   while writing this module, beyond what "no logic yet" might suggest:
+   `fy_node_get_scalar`/`fy_node_get_tag`'s text result and
+   `fy_node_get_path`/`fy_emit_document_to_string`'s heap-allocated
+   result are all typed `c-pointer` here, never `c-string` — CHICKEN's
+   `c-string` return marshaling scans for a NUL terminator (wrong for a
+   zero-copy span that may have more non-NUL bytes after its intended
+   end) and copies into a fresh GC'd Scheme string immediately (losing
+   the original pointer a caller-owned result would need to pass to
+   `c-free`). See `slibfyaml-thin.scm`'s own header comment and
+   AGENTS.md's Conventions section.
 2. **Read-only parse + navigate**: `document-parse-string`/
    `-parse-file` (with the copy-always buffer strategy from day one,
    not retrofitted), `document-root`, `node-kind`/predicates,

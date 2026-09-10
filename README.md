@@ -10,8 +10,12 @@ handles, emit it back out — rather than converting the whole document
 into a native Scheme value up front the way the existing `yaml` and
 `libyaml` Chicken eggs do.
 
-**Status: design phase.** No code has been written yet — see `PLAN.md`
-for the full design and open questions before starting implementation.
+**Status: Phase 1 (skeleton) done.** `(slibfyaml thin)` — the raw FFI
+layer — builds, links, installs, and imports under both CHICKEN 5.4.0
+and 6.0.0, confirmed via `tests/test-thin.scm` (passing, and confirmed
+leak/error-free under valgrind). Everything above `(slibfyaml thin)`
+(nodes, documents, streaming, the value-materializing API) doesn't
+exist yet — see `PLAN.md`'s Phased roadmap.
 
 ## Scope
 
@@ -57,10 +61,11 @@ is a pure consumer of the handle-based core below it — no separate
 parser, no separate typed-scalar logic. See PLAN.md's
 "Value-materializing convenience API" section for the full design.
 
-## Layout (planned)
+## Layout
 
-- `slibfyaml-thin.scm` — low-level 1:1 `foreign-lambda` imports over
-  libfyaml's exported C symbols. No ownership or error-checking policy.
+- `slibfyaml-thin.scm` — **done.** Low-level 1:1 `foreign-lambda`
+  imports over libfyaml's exported C symbols. No ownership or
+  error-checking policy.
 - `slibfyaml.scm` — condition types (`parse`, `emit`, `missing-key`,
   `data`, `resolve`).
 - `slibfyaml-nodes.scm` — `node`: a cheap, non-owning handle onto a
@@ -75,17 +80,19 @@ parser, no separate typed-scalar logic. See PLAN.md's
   suite where the same case applies.
 - `PLAN.md` — design rationale, decisions, and open questions.
 
-## Building (planned)
+## Building
 
 ```sh
 pkg-config --exists libfyaml && pkg-config --modversion libfyaml
 chicken-install
 ```
 
-See PLAN.md for the version/ABI note — the system-packaged libfyaml on
-this machine (labeled `0.8`) has been confirmed to already export every
-symbol this binding needs, the same situation `alibfyaml` found on the
-same machine.
+Confirmed working end to end (build, install, import) under both
+CHICKEN 5.4.0 and 6.0.0 on this machine — the system-packaged libfyaml
+(labeled `0.8`) exports every symbol this binding needs, the same
+situation `alibfyaml` found on the same machine. See AGENTS.md for the
+exact commands, including the faster manual `csc`-only inner loop used
+while developing.
 
 ## License
 
