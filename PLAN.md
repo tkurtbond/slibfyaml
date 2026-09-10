@@ -268,22 +268,72 @@ used together:
 
 ### Node validity after its Document is gone
 
-Ada's contract is purely documentational: "a Node is valid as long as
-its Document hasn't been finalized," enforced nowhere except by the
-caller not misusing it. CHICKEN can do slightly better cheaply: give
-each `document` record a mutable "live?" flag, and have every `node`
-record carry a reference back to the `document` it came from (not just
-the raw pointer). `node` accessors can then check
-`(document-live? owning-doc)` before touching the raw handle and raise
-a clear condition (`(exn slibfyaml use-after-free)`, or similar) instead of
-segfaulting or reading freed memory on a use-after-destroy. This is
-strictly more defensive than `alibfyaml`'s Ada contract (which relies
-on `-gnata` preconditions checking `Is_Valid` — null-check only, not a
-"my owner is gone" check) and costs one extra field + one branch per
-accessor call. Worth doing given how much of `alibfyaml`'s bug history
-is exactly this class of problem; revisit if it turns out to be a real
-performance concern (unlikely — these are FFI calls already, the
-overhead is noise).
+**Decided: yes, track owner liveness on every `node`, beyond what
+`alibfyaml`'s Ada contract does.** Ada's contract is purely
+documentational — "a Node is valid as long as its Document hasn't been
+finalized," enforced nowhere except by the caller not misusing it — and
+most of `alibfyaml`'s own confirmed bug history (`Document_Stream`
+buffer lifetime, `Insert_At` use-after-free) is exactly this class of
+mistake slipping past a documentation-only contract. CHICKEN can do
+better for a small, fixed cost, so it should.
+
+Design:
+
+```scheme
+;; (slibfyaml documents), sketch
+(define-record-type document
+  (make-document handle owned-buffer live?)
+  document?
+  (handle       document-handle set-document-handle!)
+  (owned-buffer document-owned-buffer)
+  (live?        document-live? set-document-live?!))
+
+;; (slibfyaml nodes), sketch
+(define-record-type node
+  (make-node handle owner)         ; owner: the document this node's
+  node?                            ; validity is tied to, or #f for
+  (handle handle-of)               ; null-node / not-yet-attached
+  (owner  node-owner))             ; freshly-built nodes (see below)
+```
+
+- Every accessor in `(slibfyaml nodes)` starts by calling a shared
+  `(check-node-live! n)` helper: raises `(exn slibfyaml use-after-free)`
+  if `(node-owner n)` is truthy and `(document-live? (node-owner n))`
+  is `#f`. `null-node` and any node with no owner (see below) skip the
+  liveness check and fall through to the existing `Is_Valid`-equivalent
+  null-handle check instead — the two checks are independent, not
+  layered.
+- `document-destroy!` sets `live? → #f` on its record *before* calling
+  `fy_document_destroy`, so a `node` accessor racing a concurrent
+  destroy (not a real concern without threads, but cheap to get right)
+  never observes a half-torn-down state.
+- **Freshly-built, not-yet-attached nodes** (`document-create-scalar`/
+  `_sequence`/`_mapping`, before `document-set-root!`/`node-append!`/
+  `node-append-pair!` attaches them) still get `owner` set to the
+  `document` passed to `document-create-*` — they're libfyaml-owned
+  memory belonging to that document from the moment they're created,
+  attached to the tree or not, so the same liveness check applies to
+  them unconditionally.
+- **`document-insert-at!`-consumed nodes**: per the "Insert_At-style
+  consumption contracts" section below, a `node` passed to
+  `document-insert-at!` has its `handle` field nulled out immediately
+  regardless of outcome. This is a *different* condition from
+  owner-liveness (`(exn slibfyaml consumed)`, not `use-after-free`) —
+  worth two distinct condition kinds since "your document is gone" and
+  "you already handed this specific node to Insert_At" are different
+  mistakes with different fixes, even though both are caught by a
+  guard at the top of every accessor.
+- Cost: one extra field on `node` (a reference to its owning
+  `document`, not a copy of the live-flag — reading through the
+  reference means one flag flip in `document-destroy!` invalidates
+  every `node` drawn from that document at once) and one branch per
+  accessor call. Negligible next to the FFI call itself.
+- This is strictly more defensive than `alibfyaml`'s Ada contract
+  (which relies on `-gnata` preconditions checking `Is_Valid` — a
+  null-handle check only, never a "my owner is gone" check). Revisit
+  only if it turns out to be a real, measured performance concern —
+  unlikely, given the accessor is already crossing the FFI boundary on
+  the very next line.
 
 ### The buffer-lifetime problem: worse in Chicken than it was in Ada
 
@@ -362,10 +412,19 @@ mutating procedure added later, exactly what happens to each `node`/
 
 ## Error handling
 
-Chicken condition types, matching the five Ada exceptions and the
-condition-tagging convention already used by the two existing Chicken
-YAML eggs (`(exn <lib> <procedure>)`-style composite kinds):
+Chicken condition types, matching the five Ada exceptions plus the two
+CHICKEN-specific ones from the owner-liveness tracking decided above,
+using the condition-tagging convention already used by the two
+existing Chicken YAML eggs (`(exn <lib> <procedure>)`-style composite
+kinds):
 
+- `(exn slibfyaml use-after-free)` — a `node` accessor called after its
+  owning `document` was destroyed. Has no Ada equivalent — see "Node
+  validity after its Document is gone" above.
+- `(exn slibfyaml consumed)` — a `node` accessor called on a node
+  already handed to `document-insert-at!`. Also no Ada equivalent as a
+  *condition* (Ada catches the equivalent mistake at compile time via
+  `-gnata` preconditions on a nulled-out handle instead).
 - `(exn slibfyaml parse)` — parse failure. Message formatted the same
   gcc-style way `alibfyaml`'s `Parse_Error` is
   (`file:line:column: error: message`, one line per collected
@@ -666,12 +725,6 @@ before writing the first test file):
   design/implementation.
 - `node-iterate` naming split (single overloaded name vs.
   `node-iterate-items`/`node-iterate-pairs`) — see API surface sketch.
-- Whether `document-live?`/owner-tracking on every `node` (the extra
-  defensiveness beyond what `alibfyaml`'s Ada contract provides,
-  described in Memory model above) is worth its complexity once real
-  usage patterns exist, or whether it's premature and the simpler
-  Ada-equivalent "document your contract, don't enforce it" approach
-  is enough for a first release.
 - CHICKEN 4 support: not planned. The `yaml` egg supports both via
   `cond-expand`; this project targets CHICKEN 5.4.0 only unless a
   concrete need for 4 shows up.
