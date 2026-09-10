@@ -113,6 +113,88 @@ the actual `.so`, not just the header, before relying on a symbol —
 the header being present doesn't guarantee the installed shared
 library exports it (unlikely to diverge, but cheap to check).
 
+## Target CHICKEN version(s)
+
+**Decided: CHICKEN 5.4.0 is the required baseline; CHICKEN 6 is a
+second target, best-effort, verified empirically rather than assumed.**
+Not CHICKEN 4, per explicit instruction.
+
+CHICKEN 6.0.0 released 2026-08-10 — about a month before this section
+was written — as a genuine major version with real breaking changes,
+not a rebrand. Both it and 5.4.0 are already installed on this
+machine (`/usr/local/sw/versions/chicken/{5.4.0,6.0.0}`), so nothing
+needs to be built to target both from day one.
+
+Breaking changes from CHICKEN's own migration notes that are relevant
+here:
+
+- `(scheme base)` is now the real R7RS base library; some bindings
+  that used to live in `(chicken base)` moved there (e.g.
+  `open-input-string`) and need an explicit `(import (scheme base))`
+  under 6. Relevant if/when this binding's buffer-copy helpers or test
+  harness reach for a string port.
+- **Hex escape sequences in string literals now require a trailing
+  `;`** (`\x1b;[31m`, not `\x1b[31m`) — a hard syntax break, not a
+  semantic one. Adopt as a coding rule from day one: never write a
+  bare `\xNN` escape without the trailing `;` (or use `\uNNNN`
+  instead), so no source file in this egg ever needs a version-gated
+  string literal over this.
+- Redefining a record type with the same name now creates a genuinely
+  new, distinct type rather than updating the old one in place — a
+  live-REPL concern (iterating on `node`/`document` definitions in a
+  running `csi` session), not a compiled-code one.
+- FFI gained capability (structs/unions passed by value, direct
+  complex-number passing) but nothing this binding needs was removed.
+- Build tooling changed under the hood (hand-written `./configure`,
+  `chicken-install`'s build-cache locking, a new "custom-config"
+  mechanism for portable native-library configuration) — worth
+  checking whether `custom-config` is a better way to express the
+  `pkg-config libfyaml` link step than a hard-coded `csc-options` line
+  in `slibfyaml.egg`, during the Build/packaging phase, rather than
+  assuming the CHICKEN 5 idiom is still the best available one.
+
+Confirmed live before committing to this, not assumed from the
+migration notes alone:
+
+- The list-form module names this entire plan's naming scheme depends
+  on (`(module (slibfyaml thin) ...)`) compile and import identically
+  under CHICKEN 6.0.0 — checked directly with `csi`.
+- A `foreign-lambda` binding to a real libfyaml C function
+  (`fy_document_build_from_string`) compiles, links
+  (`csc foo.scm -o foo -L -lfyaml`), and runs identically under
+  CHICKEN 5.4.0 and 6.0.0 against the same installed libfyaml.
+- The `foreign-lambda*` C-snippet idiom this plan relies on for struct
+  field access (see "Struct field access" above) also compiles and
+  runs identically under both.
+
+Not yet checked — left for the Skeleton/Packaging phases, not blocking
+design now:
+
+- Neither `yaml` nor `libyaml` (the two existing Chicken YAML eggs)
+  appears in the CHICKEN 6 egg index yet (`eggs.call-cc.org/6/`,
+  checked directly) — genuinely unexplored territory for a
+  YAML-binding egg specifically, not just for CHICKEN 6 in general.
+  Reason for care, not alarm: everything this binding actually
+  mechanically depends on (list-form modules, `foreign-lambda`,
+  `foreign-lambda*`) is confirmed working above: what's unconfirmed is
+  only the packaging side.
+- Exact `.egg`/egg-information requirements or differences for
+  CHICKEN 6 (a version constraint, a separate branch/tag, anything
+  `chicken-install` needs that CHICKEN 5 didn't) — not found on the
+  egg index page itself; consult the CHICKEN 6 manual's egg-authoring
+  section directly when writing `slibfyaml.egg` in the Skeleton phase.
+
+Practical approach: write plain CHICKEN-5-compatible code as the
+default throughout (this plan's design doesn't change), follow the
+hex-escape rule unconditionally, and add
+`(cond-expand (chicken-6 ...) (chicken-5 ...) (else ...))` branches —
+the same mechanism the `yaml` egg already uses for its own
+`chicken-4`/`chicken-5` split, just with `chicken-6`/`chicken-5` as the
+feature identifiers instead — only where a real, confirmed divergence
+actually shows up, not preemptively. Build and run the test suite
+under both `.../5.4.0` and `.../6.0.0` from the Skeleton phase onward,
+not as a late compatibility pass bolted on at the end.
+
 ## Naming
 
 **Decided**: egg name and Scheme module family are both `slibfyaml` (no
@@ -729,15 +811,19 @@ before writing the first test file):
   existing Chicken YAML eggs are BSD-style (`yaml`) and MIT
   (`libyaml`). Pick one before the first public release, doesn't block
   design/implementation.
-- CHICKEN 4 support: not planned. The `yaml` egg supports both via
-  `cond-expand`; this project targets CHICKEN 5.4.0 only unless a
-  concrete need for 4 shows up.
+- CHICKEN 4 support: not planned, not requested. See "Target CHICKEN
+  version(s)" above for the CHICKEN 5/6 decision instead.
 
 ## Phased roadmap
 
 1. **Skeleton**: `.egg` file, `(slibfyaml thin)` with the full confirmed
    C function list bound (no logic yet), builds and links against
-   system `pkg-config libfyaml`.
+   system `pkg-config libfyaml` under both
+   `/usr/local/sw/versions/chicken/5.4.0` and `.../6.0.0` — establish
+   the dual-version build/test habit here, not later. Also the point
+   at which to resolve the two "not yet checked" CHICKEN 6 items above
+   (egg-index absence of a prior YAML egg, exact `.egg`/egg-information
+   requirements for 6).
 2. **Read-only parse + navigate**: `document-parse-string`/
    `-parse-file` (with the copy-always buffer strategy from day one,
    not retrofitted), `document-root`, `node-kind`/predicates,

@@ -1,6 +1,8 @@
 # slibfyaml
 
-A CHICKEN Scheme 5 egg binding to [libfyaml](https://github.com/pantoniou/libfyaml)'s
+A CHICKEN Scheme egg (targeting CHICKEN 5.4.0, with CHICKEN 6 support
+on a best-effort basis — see PLAN.md's "Target CHICKEN version(s)")
+binding to [libfyaml](https://github.com/pantoniou/libfyaml)'s
 core parser/emitter/document API, following the same design as the
 [alibfyaml](https://codeberg.org/) Ada binding to the same library:
 parse YAML/JSON into a document tree, navigate and mutate it with cheap
