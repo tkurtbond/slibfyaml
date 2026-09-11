@@ -156,18 +156,30 @@ valgrind --leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=
 ```
 
 `test-quickstart`, `test-navigate`, `test-scalars`, `test-mutate`,
-`test-streams`, `test-buffer-lifetime`, `test-location`, and
-`test-parse-errors` are confirmed leak/error-free the same way,
-including through the exception paths (a deliberately malformed
-parse, a use-after-free triggered on purpose, every `missing-key`/
-`data` condition `test-scalars` exercises, `test-mutate`'s
-`document-insert-at!` scenarios, `test-streams`'s
-mid-stream-parse-error case, and every `document-parse-file`/
-`-parse-string` malformed-input case `test-parse-errors` exercises) —
-those paths are exactly where a missed `c-free`/double-`c-free` is
-easiest to introduce (see `document-parse-string`'s own comment on why
-its `handle-exceptions` wrapper exists), so they're not exempt from
-this check just because they're *expected* to fail.
+`test-streams`, `test-buffer-lifetime`, `test-location`,
+`test-parse-errors`, `test-path`, `example-syntax-error`,
+`example-value-error`, and `example-missing-field` are confirmed
+leak/error-free the same way, including through the exception paths (a
+deliberately malformed parse, a use-after-free triggered on purpose,
+every `missing-key`/`data` condition `test-scalars` exercises,
+`test-mutate`'s `document-insert-at!` scenarios, `test-streams`'s
+mid-stream-parse-error case, every `document-parse-file`/
+`-parse-string` malformed-input case `test-parse-errors` exercises,
+and every deliberate parse/value/missing-key failure the three
+`example-*` programs demonstrate) — those paths are exactly where a
+missed `c-free`/double-`c-free` is easiest to introduce (see
+`document-parse-string`'s own comment on why its `handle-exceptions`
+wrapper exists), so they're not exempt from this check just because
+they're *expected* to fail.
+
+The three `example-*.scm` programs (`tests/example-syntax-error.scm`,
+`tests/example-value-error.scm`, `tests/example-missing-field.scm`)
+are worked demonstrations, not `check`-style assertion tests — they
+`print`/`display` gcc-style diagnostics rather than `ok`/`FAIL` lines,
+and exit nonzero when the deliberate failure they demonstrate occurs
+(which is the expected, successful outcome of running them). Build and
+run them exactly like any other `tests/test-*.scm` file (see the Build
+section above); PLAN.md's Phase 9 writeup has the per-program detail.
 
 `test-parse-errors` in particular is the regression test for the
 double-free-on-every-parse-failure bug class `alibfyaml`'s own history

@@ -11,9 +11,13 @@ tests/test-location
 tests/test-mutate
 tests/test-navigate
 tests/test-parse-errors
+tests/test-path
 tests/test-quickstart
 tests/test-scalars
 tests/test-scheme
 tests/test-streams
 tests/test-thin
+tests/example-syntax-error
+tests/example-value-error
+tests/example-missing-field
 tests/mutate-output.yaml

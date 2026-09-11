@@ -10,9 +10,10 @@ handles, emit it back out — rather than converting the whole document
 into a native Scheme value up front the way the existing `yaml` and
 `libyaml` Chicken eggs do.
 
-**Status: Phases 1-8 done** (skeleton; read-only parse + navigate;
+**Status: Phases 1-9 done** (skeleton; read-only parse + navigate;
 typed scalars; build + emit + mutate; anchors/resolve; multi-document
-streaming; value-materializing API; diagnostics polish) — see
+streaming; value-materializing API; diagnostics polish; test/example
+parity audit) — see
 `PLAN.md`'s Phased roadmap for each phase's own writeup. In short:
 parsing (`document-parse-string`/`-parse-file`), full read-only tree
 navigation, all seven condition kinds
@@ -31,12 +32,27 @@ value-materializing convenience API (`(slibfyaml scheme)`'s
 (`node-location`/`node-has-location?`, plus gcc-style
 `"file:line:col: error: ..."` parse-error formatting, done since Phase
 2) all work end to end. Confirmed via `tests/test-*.scm` (one file per
-concern, 11 files so far, all passing and leak/error-free under
-valgrind — including through every deliberate failure path each one
-exercises, and one genuinely new libfyaml bug found and worked around
-along the way, not just bugs `alibfyaml` had already found — see
-PLAN.md's Phase 7 writeup) under both CHICKEN 5.4.0 and 6.0.0.
+concern, 12 files, all passing and leak/error-free under valgrind —
+including through every deliberate failure path each one exercises,
+and one genuinely new libfyaml bug found and worked around along the
+way, not just bugs `alibfyaml` had already found — see PLAN.md's Phase
+7 writeup) plus three worked `tests/example-*.scm` demonstrations
+(gcc-style diagnostics on a syntax error, a typed-value error, and a
+missing-required-key case shown via `node-location`, `node-path`, and
+both together — ported from `alibfyaml`'s own `test/example_*.adb`,
+see PLAN.md's Phase 9 writeup), under both CHICKEN 5.4.0 and 6.0.0.
 Remaining: packaging polish — see `PLAN.md`'s Phased roadmap.
+
+Parsing from an already-open CHICKEN port (a file the caller opened
+itself, `(current-input-port)`, etc.) has no dedicated entry point —
+`document-parse-string`/`-parse-file` cover the string/path cases;
+for a port, read it fully first: `(document-parse-string (read-string
+#f port))`. See PLAN.md's Phase 9 writeup for why this, not a new
+`document-parse-port`, is the documented idiom here (libfyaml's own
+`fy_document_build_from_fp` isn't real streaming either — it typically
+reads the whole remaining file in one internal `fread()` regardless of
+document count — and CHICKEN has no portable way to obtain a `FILE *`
+from an arbitrary port to bind it in the first place).
 
 ## Scope
 
@@ -124,7 +140,9 @@ parser, no separate typed-scalar logic. See PLAN.md's
   field its own streaming parser can leave behind, worked around in
   `node-null-value?` — see PLAN.md's Phase 7 writeup.
 - `tests/` — one test file per concern, ported from `alibfyaml`'s test
-  suite where the same case applies.
+  suite where the same case applies, plus three `example-*.scm` worked
+  demonstrations (gcc-style diagnostics, not `check`-style assertions)
+  ported from `alibfyaml`'s own `test/example_*.adb` (Phase 9).
 - `PLAN.md` — design rationale, decisions, and open questions.
 
 ## Building

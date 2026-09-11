@@ -1322,9 +1322,106 @@ before writing the first test file):
    natural, cheap follow-ons if a concrete need ever shows up, same as
    `alibfyaml` notes for its own scope — not built here since nothing
    currently needs them.
-9. **Packaging**: finalize `.egg` metadata, license, README examples
-   matching the finished API, submit to CHICKEN's egg index if
-   desired.
+9. **`[done]` Test/example parity audit**: a direct file-by-file
+   comparison of `alibfyaml`'s `test/*.adb` against `tests/*.scm`
+   turned up three gaps not called out as deliberate exclusions
+   anywhere above — found after Phase 8, not planned for as part of
+   it.
+
+   **`test-path.scm`** (8 checks) ports `alibfyaml`'s own
+   `test_path.adb` directly, reusing the existing `tests/navigate.yaml`
+   fixture: `node-path` on the document root itself (`"/"`, not `""`,
+   confirmed live despite the C header's own claim that
+   `fy_node_get_path` returns `NULL` for the root — already noted in
+   `slibfyaml-nodes.scm`'s own comment since Phase 2, re-confirmed
+   here), a top-level scalar, a sequence element (`/tags/0`), a
+   mapping node (`/server` — the concrete case `node-path` exists to
+   cover that `node-location` structurally cannot, since a mapping
+   node has no scalar token to hang a position off of), four levels of
+   real nesting, a field inside one element of a sequence-of-mappings,
+   and a full `node-by-path (node-path n) = n` round-trip between two
+   different ways of reaching the same node. 8/8 checks pass, confirmed
+   leak/error-free under valgrind.
+
+   **`tests/example-syntax-error.scm`, `tests/example-value-error.scm`,
+   `tests/example-missing-field.scm`** port `alibfyaml`'s own
+   `example_syntax_error.adb`/`example_value_error.adb`/
+   `example_missing_field.adb` line for line — worked demonstrations
+   (plain `print`/`display` output, no `ok`/`FAIL` checks) rather than
+   assertion tests, living in `tests/` alongside the `test-*.scm` files
+   with an `example-` prefix rather than a separate `examples/`
+   directory, matching `alibfyaml`'s own flat `test/` layout and
+   letting them share `tests/`' existing fixtures and manual-build
+   commands without new bookkeeping. New fixtures `tests/value_error.yaml`
+   and `tests/missing_field.yaml` copied from `alibfyaml`'s own
+   (underscore names kept, matching the existing `tests/anchors_cycle.yaml`
+   precedent of preserving the Ada fixture's own name rather than
+   converting to this repo's hyphenated `.scm` convention).
+
+   - `example-syntax-error`: a pure parse error, no tree at all —
+     reports the `(exn slibfyaml parse)` condition's own `'exn
+     'message` gcc-format text directly, parsing the same malformed
+     text from both a file and a string to show the one real
+     difference (the `"file"` field: the real path vs.
+     `document-parse-string`'s fixed `"(string-in-memory)"` override).
+     Confirmed live output matches the Ada original's shape exactly
+     (`malformed.yaml:3:1: error: flow sequence without a closing
+     bracket`, same text again under the string-in-memory label).
+   - `example-value-error`: a value that parses fine as YAML but fails
+     a typed accessor — looks up the node with `node-by-path` *before*
+     calling `node-integer-value` on it, so it's still in scope in the
+     `condition-case` handler to report via `node-location` alongside
+     the `(exn slibfyaml data)` condition's message, falling back to a
+     location-less message for a node with no location at all. Confirmed
+     live: `value_error.yaml:2:8: error: not a valid integer: "banana"`,
+     same again from a string under `(string-in-memory)`.
+   - `example-missing-field`: a genuinely different case from
+     `example-value-error` — the key is simply absent, so there is no
+     node/token for it at all and `node-location` has nothing to
+     report a position for. Reports three ways: `node-location` alone
+     (approximated via the nearby sibling `"name"` field every entry
+     has, clearly labeled "near"), `node-path` alone (exact and always
+     available — the *enclosing mapping's* own path plus the missing
+     key's name, e.g. `/1/count`, something `node-location`
+     fundamentally cannot produce for an absent key), and both
+     together. Confirmed live against `missing_field.yaml`'s "beta"
+     entry (index 1, 0-based): all three report forms match the Ada
+     original's shape.
+
+   All three confirmed leak/error-free under valgrind, including
+   through their deliberate failure paths (the whole point of each).
+
+   **`test_text_io.adb`** is not ported, and after investigating it's
+   a closed question rather than a deferred one: it exercises
+   `Libfyaml.Documents.Text_IO.Parse`, which reaches libfyaml's
+   `fy_document_build_from_fp` (a raw C `FILE *`) by pulling the
+   underlying C stream out of an open `Ada.Text_IO.File_Type` via
+   `Ada.Text_IO.C_Streams` — itself a GNAT-specific extension, not
+   portable Ada, precisely because Ada has no portable way to get a
+   `FILE *` out of a `File_Type` either. CHICKEN's situation is
+   actually worse, not just differently awkward: a CHICKEN port is not
+   generally backed by a libc `FILE *` at all (CHICKEN 5's own file
+   I/O goes through its own buffered layer over a POSIX file
+   descriptor, not stdio), so there is no portable "get me the
+   underlying `FILE *`" trick available even as an unportable escape
+   hatch the way GNAT provides one — `fy_document_build_from_fp` is
+   not bound in `slibfyaml-thin.scm` and adding it would need new,
+   platform-specific FFI surface (e.g. `fdopen` over a raw fd obtained
+   some other way) for comparatively little gain. Decided not to add
+   it: `Ada.Text_IO.C_Streams.Parse`'s own doc comment already notes
+   that `fy_document_build_from_fp` isn't real streaming anyway —
+   confirmed live, a single call typically reads the *entire*
+   remaining file in one internal `fread()`, regardless of how many
+   documents worth of bytes that is — so an already-open CHICKEN port
+   can get the same effective behavior today with no new binding
+   surface at all: `(document-parse-string (read-string #f port))`,
+   confirmed live to work identically against both a string port and a
+   real open file port. That composition is the documented idiom for
+   this case (see README.md) rather than a new `document-parse-port`
+   entry point.
+10. **Packaging**: finalize `.egg` metadata, license, README examples
+    matching the finished API, submit to CHICKEN's egg index if
+    desired.
 
 Each phase should leave the tree in a state where its own test file(s)
 pass under valgrind before moving to the next phase — not deferred to
