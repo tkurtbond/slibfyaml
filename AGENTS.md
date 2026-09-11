@@ -5,6 +5,35 @@ Ada design. See README.md for scope, PLAN.md for design history and open
 questions. This file is operational notes for an agent working in this
 repo, not a design doc.
 
+## OOM safety
+
+The OOM killer has killed a previous agent session in this repo
+outright (three times), so every compile/test/valgrind/interpreter
+invocation below is run capped, not run bare:
+
+```sh
+bash -c 'ulimit -v 2000000; exec timeout 30 <cmd>'   # running a compiled test, or csi
+bash -c 'ulimit -v 4000000; exec timeout 60 <cmd>'   # compiling, or valgrind
+```
+
+Treat these caps as the default way to invoke `csc`/a compiled
+test/`valgrind`/`csi` in this repo, not an occasional precaution.
+`csi` included — it loads the same full CHICKEN runtime a compiled
+test does, whether it's the Build section's `chicken-install`
+verification step or just an ad hoc one-off probe run to check some
+behavior live; there's nothing about going through the interpreter
+instead of a compiled binary that makes it exempt.
+
+Alongside this, an append-only, untracked `OOM_SESSION_LOG.md`
+(gitignored — never commit it) is kept as a forensic log for exactly
+this failure mode: append a `NEXT:` line describing the action *before*
+running it, then append the matching `RESULT:` line after it completes
+(or, if the session gets killed, the dangling `NEXT:` with no `RESULT:`
+is itself the evidence of what was running at the time). Keep this
+discipline for every risky/executable step, not just the ones that
+already worry you — the point is to have a trail regardless of which
+one turns out to be the problem.
+
 ## Build
 
 Two ways, both confirmed working under both target CHICKEN versions
