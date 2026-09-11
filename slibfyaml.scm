@@ -20,6 +20,8 @@
   (
    raise-parse-error
    raise-use-after-free
+   raise-missing-key
+   raise-data-error
    )
 
 (import scheme)
@@ -49,5 +51,30 @@
 ;; contract for this is documentation-only (see PLAN.md's "Node
 ;; validity after its Document is gone" and the note added to
 ;; alibfyaml's own libfyaml-nodes.ads).
+
+(define (raise-missing-key key path)
+  (abort (slibfyaml-condition 'missing-key
+                               (string-append "missing required key \"" key
+                                              "\" at " path)
+                               'path path)))
+;; Raised by node-required (and, through it, every mapping-collapsed
+;; typed accessor's required form) when Key is absent from Map. Carries
+;; 'path -- (node-path map) -- as a structured field in addition to
+;; folding it into the message text, per PLAN.md's "Location and Path"
+;; section: alibfyaml's own Missing_Key carries only a bare message,
+;; this goes further since CHICKEN conditions make it cheap to.
+
+(define (raise-data-error message path)
+  (abort (slibfyaml-condition 'data message 'path path)))
+;; Raised by every typed scalar accessor (node-integer-value and
+;; friends) for a shape or grammar mismatch -- non-scalar value, text
+;; that doesn't match the target type's grammar, or (for float) a
+;; literal that overflows a double to infinity. message is the same
+;; bare diagnostic text alibfyaml's own Data_Error carries (e.g. "not a
+;; valid integer: \"banana\""); 'path -- (node-path n), always
+;; available -- is attached as a structured field on top, same
+;; rationale as raise-missing-key above. 'line/'column (from
+;; node-location, when available) are deferred to Phase 8, which is
+;; where node-location/node-has-location? are introduced.
 
 ) ;; module

@@ -33,9 +33,13 @@
    node-scalar? node-sequence? node-mapping?
    node-scalar-value
    node-length node-item
-   node-value node-has-key?
+   node-value node-has-key? node-required
    node-iterate-items node-iterate-pairs
    node-by-path node-path
+
+   node-null-value?
+   node-integer? node-float? node-boolean?
+   node-integer-value node-float-value node-boolean-value node-string-value
 
    ;; Binding-internal: bridges to/from the raw Thin handle and the
    ;; shared liveness box. Used by (slibfyaml documents) and (later)
@@ -230,5 +234,314 @@
 ;; returns NULL for the root; the "" fallback above is purely
 ;; defensive for whatever the *documented* NULL case might be, should
 ;; it ever actually occur, not for the root specifically.
+
+;;;; Required mapping access
+
+(define (node-required map key)
+  (let ((v (node-value map key)))
+    (if (node-valid? v)
+        v
+        (raise-missing-key key (node-path map)))))
+;; The value associated with Key, raising (exn slibfyaml missing-key)
+;; -- rather than returning null-node -- if Map has no such key. Same
+;; as alibfyaml's Required; node-value above already checks liveness
+;; and mapping-kind, so this doesn't repeat either check.
+
+(define (required-scalar map key)
+  (let ((v (node-required map key)))
+    (if (node-scalar? v)
+        v
+        (raise-data-error (string-append "key \"" key "\" is not a scalar value")
+                           (node-path map)))))
+;; Like node-required, but also confirms the found value is a scalar,
+;; raising (exn slibfyaml data) -- not a bare assert -- if it's a
+;; sequence/mapping instead: this is a malformed-*data* problem, not a
+;; caller/programmer error the way calling e.g. node-scalar-value on a
+;; non-scalar node is. Private to this module -- used by every
+;; mapping-collapsed typed accessor below, same as alibfyaml's own
+;; Required_Scalar.
+
+;;;; Typed scalar accessors (YAML 1.2 core schema, plus alibfyaml's own
+;;;; two documented extensions: "0b" binary integers, and "_" as a
+;;;; digit separator strictly between two digits in any base) -- ported
+;;;; from libfyaml-nodes.adb's private grammar helpers section. See
+;;;; PLAN.md's "Typed scalar accessors" section for the schema
+;;;; reference and the two extensions' rationale.
+;;;;
+;;;; libfyaml's core layer hands back scalars as plain text; it does
+;;;; not implicitly resolve "8" to an integer or "true" to a boolean
+;;;; the way a schema-aware loader would. Resolving that is this
+;;;; module's job, same division of labor as alibfyaml's Ada.
+
+(define (trimmed s)
+  (let* ((len (string-length s))
+         (start (let loop ((i 0))
+                  (if (and (< i len) (char-whitespace? (string-ref s i)))
+                      (loop (+ i 1))
+                      i)))
+         (end (let loop ((i len))
+                (if (and (> i start) (char-whitespace? (string-ref s (- i 1))))
+                    (loop (- i 1))
+                    i))))
+    (substring s start end)))
+
+(define (strip-sign s)
+  (if (and (> (string-length s) 0)
+           (memv (string-ref s 0) '(#\+ #\-)))
+      (substring s 1 (string-length s))
+      s))
+
+(define (dec-digit? c) (and (char>=? c #\0) (char<=? c #\9)))
+(define (hex-digit? c)
+  (or (dec-digit? c)
+      (and (char>=? c #\a) (char<=? c #\f))
+      (and (char>=? c #\A) (char<=? c #\F))))
+(define (oct-digit? c) (and (char>=? c #\0) (char<=? c #\7)))
+(define (bin-digit? c) (or (char=? c #\0) (char=? c #\1)))
+
+;; Length of the maximal run starting at S[from] matching the grammar
+;; `digit ('_' digit)*` under the given digit predicate (0 if S[from]
+;; itself isn't a digit, or from is past S's end) -- the underscore is
+;; accepted only strictly between two digits, never leading, trailing,
+;; or doubled. The matched text (underscores included) is what
+;; strip-underscores below then cleans up before handing the digits to
+;; string->number -- this is what lets "1_000_000" or "0xFF_FF" through
+;; as an extension without a separate validation pass.
+(define (digit-run-length s from digit?)
+  (let ((len (string-length s)))
+    (if (or (>= from len) (not (digit? (string-ref s from))))
+        0
+        (let loop ((i (+ from 1)))
+          (cond ((>= i len) (- i from))
+                ((digit? (string-ref s i)) (loop (+ i 1)))
+                ((and (char=? (string-ref s i) #\_)
+                      (< (+ i 1) len)
+                      (digit? (string-ref s (+ i 1))))
+                 (loop (+ i 2)))
+                (else (- i from)))))))
+
+(define (digit-run? s digit?)
+  (and (> (string-length s) 0)
+       (= (digit-run-length s 0 digit?) (string-length s))))
+
+;; "0b" (binary) is a documented extension beyond YAML 1.2 core schema,
+;; accepted unconditionally rather than gated behind a schema-selection
+;; flag -- see PLAN.md.
+(define (integer-text? s)
+  (let ((b (strip-sign s)))
+    (cond ((and (>= (string-length b) 2) (string=? (substring b 0 2) "0x"))
+           (digit-run? (substring b 2 (string-length b)) hex-digit?))
+          ((and (>= (string-length b) 2) (string=? (substring b 0 2) "0o"))
+           (digit-run? (substring b 2 (string-length b)) oct-digit?))
+          ((and (>= (string-length b) 2) (string=? (substring b 0 2) "0b"))
+           (digit-run? (substring b 2 (string-length b)) bin-digit?))
+          (else (digit-run? b dec-digit?)))))
+
+;; YAML 1.2 core schema float grammar: a required decimal digit run,
+;; then an optional ".frac" (a digit required on both sides of the
+;; dot -- bare ".5" or trailing "3." are not accepted), then an
+;; optional exponent. No 0x/0o/0b handling here -- unlike
+;; integer-text?, a based literal is never valid float grammar (e.g.
+;; "0x1A" is Is_Integer but not Is_Float, confirmed against alibfyaml's
+;; own test/scalars.yaml). A plain decimal integer (no dot, no
+;; exponent) does count as valid float text, same as alibfyaml.
+(define (float-text? s)
+  (let* ((b (strip-sign s))
+         (blen (string-length b)))
+    (and (> blen 0)
+         (let ((int-len (digit-run-length b 0 dec-digit?)))
+           (and (> int-len 0)
+                (let ((pos1 (if (and (< int-len blen) (char=? (string-ref b int-len) #\.))
+                                 (let ((flen (digit-run-length b (+ int-len 1) dec-digit?)))
+                                   (if (= flen 0) -1 (+ int-len 1 flen)))
+                                 int-len)))
+                  (and (>= pos1 0)
+                       (let ((pos2 (if (and (< pos1 blen) (memv (string-ref b pos1) '(#\e #\E)))
+                                        (let* ((p2 (+ pos1 1))
+                                               (p3 (if (and (< p2 blen) (memv (string-ref b p2) '(#\+ #\-)))
+                                                       (+ p2 1) p2))
+                                               (elen (digit-run-length b p3 dec-digit?)))
+                                          (if (= elen 0) -1 (+ p3 elen)))
+                                        pos1)))
+                         (and (>= pos2 0) (= pos2 blen))))))))))
+
+(define (boolean-text? s)
+  (or (member s '("true" "True" "TRUE"))
+      (member s '("false" "False" "FALSE"))))
+
+;; YAML 1.2 core schema null spellings. Deliberately excludes "": an
+;; explicit quoted "" is a deliberate empty *string*, not null -- the
+;; unquoted-omitted case ("key:" with nothing after) is handled
+;; separately, by libfyaml's own fy_node_is_null, at the token level
+;; rather than by text content.
+(define (null-text? s)
+  (or (string=? s "~") (string=? s "null") (string=? s "Null") (string=? s "NULL")))
+
+(define (strip-underscores s)
+  (let* ((len (string-length s))
+         (buf (make-string len)))
+    (let loop ((i 0) (j 0))
+      (if (>= i len)
+          (substring buf 0 j)
+          (if (char=? (string-ref s i) #\_)
+              (loop (+ i 1) j)
+              (begin (string-set! buf j (string-ref s i))
+                     (loop (+ i 1) (+ j 1))))))))
+;; No srfi-1 filter/string->list dependency -- this module (like the
+;; rest of slibfyaml) sticks to plain scheme + (chicken base), matching
+;; the project's no-unnecessary-egg-dependencies stance (see
+;; slibfyaml.egg's own (dependencies (chicken "5.4.0")) line).
+
+;; S is already confirmed by integer-text? to match the grammar --
+;; parses straight to a Scheme integer via string->number's explicit-
+;; radix form (which, confirmed live, accepts a leading sign combined
+;; with a radix argument directly, e.g. (string->number "-1A" 16) =>
+;; -26, so no separate sign-then-reassemble step is needed the way
+;; alibfyaml's Integer_Literal_Text rewrite for Ada's based-literal
+;; syntax requires). No overflow case, unlike every one of alibfyaml's
+;; three fixed-width Integer_Value/Long_Integer_Value/
+;; Long_Long_Integer_Value -- CHICKEN's numeric tower auto-promotes to
+;; bignums, so this one function covers arbitrarily large integers; see
+;; PLAN.md's API surface sketch note on this collapse.
+(define (parse-integer-text s)
+  (let* ((sign? (and (> (string-length s) 0) (memv (string-ref s 0) '(#\+ #\-))))
+         (sign (if sign? (substring s 0 1) ""))
+         (unsigned (strip-underscores (if sign? (substring s 1 (string-length s)) s))))
+    (cond ((and (>= (string-length unsigned) 2) (string=? (substring unsigned 0 2) "0x"))
+           (string->number (string-append sign (substring unsigned 2 (string-length unsigned))) 16))
+          ((and (>= (string-length unsigned) 2) (string=? (substring unsigned 0 2) "0o"))
+           (string->number (string-append sign (substring unsigned 2 (string-length unsigned))) 8))
+          ((and (>= (string-length unsigned) 2) (string=? (substring unsigned 0 2) "0b"))
+           (string->number (string-append sign (substring unsigned 2 (string-length unsigned))) 2))
+          (else (string->number (string-append sign unsigned) 10)))))
+
+;; S is already confirmed by float-text? to match the grammar --
+;; strip-underscores then hand straight to string->number, whose
+;; syntax otherwise already matches (sign, digit run, optional
+;; ".frac", optional e/E exponent). May return +inf.0/-inf.0 for a
+;; literal that overflows a double's finite range (confirmed live: e.g.
+;; (string->number "1e400") => +inf.0, no exception) -- the caller
+;; (float-value-of-node below) checks for that explicitly, since
+;; CHICKEN flonums are IEEE double (matching alibfyaml's Long_Float,
+;; the widest of its Float_Value/Long_Float_Value pair), so this one
+;; function also covers what alibfyaml needs two for, but an overflow
+;; check is still needed at the one width that remains.
+(define (parse-float-text s)
+  (string->number (strip-underscores s)))
+
+(define (node-null-value? n)
+  (check-node-live! n)
+  (or (fy_node_is_null (node-raw n))
+      (and (node-scalar? n) (null-text? (trimmed (node-scalar-value n))))))
+;; True if N is an empty/omitted scalar (fy_node_is_null resolves this
+;; -- confirmed against the installed libfyaml header that a NULL node
+;; argument itself also returns true, so this needs no extra
+;; node-valid? guard) OR a scalar whose text is a YAML 1.2 null
+;; spelling. Same as alibfyaml's Is_Null_Value; unlike node-integer?/
+;; node-float?/node-boolean? below, doesn't require N to already be a
+;; scalar (mirrors Is_Null_Value's own precondition, which is just
+;; Is_Valid, not Is_Valid-and-then-Is_Scalar).
+
+(define (node-integer? n) (integer-text? (trimmed (node-scalar-value n))))
+(define (node-float? n) (float-text? (trimmed (node-scalar-value n))))
+(define (node-boolean? n) (boolean-text? (trimmed (node-scalar-value n))))
+;; Non-raising shape predicates -- e.g. for deciding whether a list
+;; element is a plain string or some other scalar shape before
+;; committing to a conversion. node-scalar-value already enforces N is
+;; a scalar (via its own assert), matching alibfyaml's
+;; Is_Valid-and-then-Is_Scalar precondition on Is_Integer/Is_Float/
+;; Is_Boolean.
+
+(define (integer-value-of-node n)
+  (let ((text (trimmed (node-scalar-value n))))
+    (if (integer-text? text)
+        (parse-integer-text text)
+        (raise-data-error (string-append "not a valid integer: \"" text "\"")
+                           (node-path n)))))
+
+(define (float-value-of-node n)
+  (let ((text (trimmed (node-scalar-value n))))
+    (if (float-text? text)
+        (let ((v (parse-float-text text)))
+          (if (or (= v +inf.0) (= v -inf.0))
+              (raise-data-error (string-append "float out of range: \"" text "\"")
+                                 (node-path n))
+              v))
+        (raise-data-error (string-append "not a valid float: \"" text "\"")
+                           (node-path n)))))
+
+(define (boolean-value-of-node n)
+  (let ((text (trimmed (node-scalar-value n))))
+    (cond ((member text '("true" "True" "TRUE")) #t)
+          ((member text '("false" "False" "FALSE")) #f)
+          (else (raise-data-error (string-append "not a valid boolean: \"" text "\"")
+                                   (node-path n))))))
+;; Raise (exn slibfyaml data) if the scalar text doesn't match the
+;; target type's grammar (including a float literal that overflows a
+;; double to infinity) -- same as alibfyaml's Data_Error, plus the
+;; automatic 'path field raise-data-error itself attaches (see
+;; slibfyaml.scm). Each assumes N is already a scalar, same precondition
+;; as node-integer?/node-float?/node-boolean? above -- node-scalar-value
+;; enforces it.
+
+;; A unique sentinel, never `eq?` to anything a caller could pass, used
+;; below to tell "key/default not supplied" apart from any real
+;; argument value (including #f, which is a legitimate default) --
+;; CHICKEN's #!optional has no built-in supplied-p the way some other
+;; Lisps do.
+(define unsupplied (list 'unsupplied))
+
+(define (typed-mapping-value map key convert)
+  (convert (required-scalar map key)))
+;; Required (Map, Key) form shared by every typed accessor below:
+;; (exn slibfyaml missing-key) if Key is absent, (exn slibfyaml data)
+;; if present but not a scalar (both via required-scalar) or scalar but
+;; grammar-malformed (via convert).
+
+(define (typed-mapping-value/default map key default convert)
+  (let ((v (node-value map key)))
+    (cond ((not (node-valid? v)) default)
+          ((not (node-scalar? v))
+           (raise-data-error (string-append "key \"" key "\" is not a scalar value")
+                              (node-path map)))
+          (else (convert v)))))
+;; Optional (Map, Key, Default) form: Default only substitutes for
+;; Key's *absence* -- a present-but-malformed or present-but-non-scalar
+;; value still raises, never silently falls back to Default, per
+;; alibfyaml's explicit design rule that a default must never mask a
+;; malformed value.
+
+(define (node-integer-value n #!optional (key unsupplied) (default unsupplied))
+  (cond ((eq? key unsupplied) (integer-value-of-node n))
+        ((eq? default unsupplied) (typed-mapping-value n key integer-value-of-node))
+        (else (typed-mapping-value/default n key default integer-value-of-node))))
+
+(define (node-float-value n #!optional (key unsupplied) (default unsupplied))
+  (cond ((eq? key unsupplied) (float-value-of-node n))
+        ((eq? default unsupplied) (typed-mapping-value n key float-value-of-node))
+        (else (typed-mapping-value/default n key default float-value-of-node))))
+
+(define (node-boolean-value n #!optional (key unsupplied) (default unsupplied))
+  (cond ((eq? key unsupplied) (boolean-value-of-node n))
+        ((eq? default unsupplied) (typed-mapping-value n key boolean-value-of-node))
+        (else (typed-mapping-value/default n key default boolean-value-of-node))))
+;; Three arities each, dispatched on which #!optional args were
+;; actually supplied (CHICKEN's stand-in for Ada's overload
+;; resolution): (node-T-value n) is the per-node form (Pre => Is_Scalar,
+;; enforced by node-scalar-value inside *-value-of-node); (node-T-value
+;; map key) and (node-T-value map key default) are the mapping-
+;; collapsed required/optional forms. No node-string-value(n) --
+;; node-scalar-value already covers that case; alibfyaml itself has no
+;; bare Node overload of String_Value either, only the (Map, Key) forms
+;; below.
+
+(define (node-string-value map key #!optional (default unsupplied))
+  (if (eq? default unsupplied)
+      (typed-mapping-value map key node-scalar-value)
+      (typed-mapping-value/default map key default node-scalar-value)))
+;; String_Value never rejects text on grammar grounds (any scalar text
+;; is valid), unlike its numeric/boolean siblings -- the only ways to
+;; get (exn slibfyaml data) here are the shared non-scalar-value check
+;; and (exn slibfyaml missing-key) for the required form's absent key.
 
 ) ;; module

@@ -973,8 +973,61 @@ before writing the first test file):
    AGENTS.md's Build section for the full writeup, including the
    separate `CHICKEN_REPOSITORY_PATH`-replaces-rather-than-extends
    gotcha found while verifying this against a real installed egg.
-3. **Typed scalars**: the full `node-integer-value`/etc. family, core
-   schema + the two extensions, `test-scalars` exhaustive coverage.
+3. **`[done]` Typed scalars**: `node-null-value?`, `node-integer?`/
+   `node-float?`/`node-boolean?`, `node-integer-value`/`node-float-value`/
+   `node-boolean-value`/`node-string-value` in all three arities (bare
+   node; required `(map key)`; optional `(map key default)`), and
+   `node-required`. Core schema (null/bool/int/float) plus both
+   documented extensions (`0b` binary, `_` digit separators), grammar
+   logic ported directly from `libfyaml-nodes.adb`'s private
+   validation/parsing helpers, not reimplemented from the schema spec
+   from scratch. `test-scalars` ported from `alibfyaml`'s own
+   `test_scalars.adb`, using its `scalars.yaml` fixture directly
+   (51 checks), passing and confirmed leak/error-free under valgrind.
+
+   Two deliberate, documented divergences from the Ada original, both
+   from the per-width-overload collapse already anticipated in this
+   file's own "Typed scalar accessors" section: `big_int`/`huge_int`
+   (chosen in `scalars.yaml` to overflow Ada's 32-/64-bit `Integer`
+   forms) succeed here as ordinary bignums instead of raising
+   `Data_Error`; `float_overflow` (chosen to overflow only Ada's 32-bit
+   `Float`) succeeds here as a plain double instead of needing the
+   `Long_Float`-only accessor Ada does -- only `huge_float`, which
+   overflows even a 64-bit double to `+inf.0`/`-inf.0`, still exercises
+   the "float out of range" `data` condition.
+
+   New condition kinds `(exn slibfyaml missing-key)` and
+   `(exn slibfyaml data)`, per this file's own "Location and Path"
+   section's decision -- both carry `'path` (`node-path`) automatically,
+   attached by the raiser rather than left to the caller;
+   `missing-key`'s message folds `'path` into the text too
+   (`"missing required key \"x\" at /y"`), `data`'s does not (matching
+   `alibfyaml`'s own bare `Data_Error` message text, with `'path` only
+   as a structured field on top). `'line`/`'column` on `data` are
+   deferred to Phase 8, which is where `node-location`/
+   `node-has-location?` (the only source for them) are introduced --
+   noted at the two `raise-data-error` call sites in
+   `slibfyaml-nodes.scm` so this isn't forgotten.
+
+   Implementation-time findings: CHICKEN's `#!optional` has no
+   supplied-p the way some other Lisps do, so each of the three-arity
+   accessors dispatches on whether trailing args were actually passed
+   via a private `eq?`-compared sentinel object (`unsupplied`), not on
+   `#f` (a legitimate default value) or arg count directly. `filter`/
+   `string->list` (the obvious way to strip `_` separators) turned out
+   to need `srfi-1`, not available under this module's existing plain
+   `scheme` + `(chicken base)` imports -- rewritten as an explicit
+   index-copying loop over `make-string`/`string-set!` rather than
+   adding a new egg dependency for one four-line helper. Confirmed live
+   (not assumed) that CHICKEN's `string->number` accepts a leading sign
+   combined with an explicit radix argument directly (`(string->number
+   "-1A" 16)` => `-26`), which is what lets `parse-integer-text` hand
+   the sign-plus-digits straight to `string->number` without
+   `alibfyaml`'s own `Integer_Literal_Text` based-literal-rewrite step
+   (an Ada-syntax-specific need that doesn't exist here); also confirmed
+   that a double-precision literal overflow (`(string->number "1e400")`)
+   returns `+inf.0` rather than raising, which is what
+   `float-value-of-node` checks for explicitly.
 4. **Build + emit + mutate**: `document-create-*`, `document-set-root!`,
    `document-insert-at!` (with unconditional-consumption discipline),
    `node-append!`/`node-append-pair!`, `document->yaml-string`/

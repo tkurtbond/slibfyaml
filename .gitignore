@@ -7,4 +7,5 @@
 .chicken-install/
 tests/test-navigate
 tests/test-quickstart
+tests/test-scalars
 tests/test-thin

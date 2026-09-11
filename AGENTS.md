@@ -151,10 +151,11 @@ error-free under:
 valgrind --leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=99 ./test-thin
 ```
 
-`test-quickstart` and `test-navigate` are confirmed leak/error-free the
-same way, including through the exception paths (a deliberately
-malformed parse, a use-after-free triggered on purpose) — those paths
-are exactly where a missed `c-free`/double-`c-free` is easiest to
+`test-quickstart`, `test-navigate`, and `test-scalars` are confirmed
+leak/error-free the same way, including through the exception paths (a
+deliberately malformed parse, a use-after-free triggered on purpose,
+every `missing-key`/`data` condition `test-scalars` exercises) — those
+paths are exactly where a missed `c-free`/double-`c-free` is easiest to
 introduce (see `document-parse-string`'s own comment on why its
 `handle-exceptions` wrapper exists), so they're not exempt from this
 check just because they're *expected* to fail.
