@@ -1028,10 +1028,52 @@ before writing the first test file):
    that a double-precision literal overflow (`(string->number "1e400")`)
    returns `+inf.0` rather than raising, which is what
    `float-value-of-node` checks for explicitly.
-4. **Build + emit + mutate**: `document-create-*`, `document-set-root!`,
-   `document-insert-at!` (with unconditional-consumption discipline),
-   `node-append!`/`node-append-pair!`, `document->yaml-string`/
-   `-write-to-file!`. `test-mutate`.
+4. **`[done]` Build + emit + mutate**: `document-create-scalar`/
+   `-sequence`/`-mapping`, `document-set-root!`, `node-append!`/
+   `node-append-pair!`, `document->yaml-string`/`-write-to-file!`
+   (`emit-default`/`emit-sort-keys`/`emit-mode-block`/`emit-mode-flow`/
+   `emit-mode-flow-oneline`/`emit-mode-json`, the same subset `alibfyaml`
+   binds out of libfyaml's larger emitter-flag set), and
+   `document-insert-at!` with its unconditional-consumption discipline.
+   `test-mutate` ports `alibfyaml`'s own `test_mutate.adb`'s three
+   `Insert_At` scenarios directly (replacing a scalar, merging a mapping,
+   an invalid path), extended with coverage for the rest of this phase's
+   surface that `alibfyaml` doesn't bundle into one test file the same
+   way — 21 checks, confirmed leak/error-free under valgrind.
+
+   Confirmed against the Ada source before porting, not assumed: unlike
+   `document-insert-at!`, `node-append!`/`node-append-pair!`/
+   `document-set-root!` do **not** consume their node arguments —
+   `fy_node_sequence_append`/`fy_node_mapping_append`/
+   `fy_document_set_root`'s own headers document no unref, confirmed
+   directly against `libfyaml-nodes.adb`'s `Append`/`Append_Pair` and
+   `libfyaml-documents.adb`'s `Set_Root`, each of which leaves its node
+   argument valid and reusable afterward. Also confirmed: `Set_Root`/
+   `Insert_At`/`Append`/`Append_Pair` all raise a generic Ada
+   `Program_Error` on a nonzero libfyaml status (not one of `alibfyaml`'s
+   five domain exceptions) — mirrored here as a plain `(error ...)`, the
+   same choice already made for `node-kind`'s own "should never happen"
+   case, rather than inventing a new condition kind Ada itself doesn't
+   have an equivalent domain exception for.
+
+   The consumption discipline itself is `document-insert-at!` porting a
+   bug `alibfyaml` already hit and fixed, confirmed live with valgrind
+   there: `fy_document_insert_at` unconditionally unrefs its node
+   argument, on success as much as on failure, freeing a freshly-built
+   node with no other reference either way — an earlier `alibfyaml`
+   version only nulled its own `N` out on failure, so a *successful*
+   merge left the caller holding a node pointing at memory libfyaml had
+   already freed (masked without valgrind, since the freed bytes
+   happened to still look plausible). `slibfyaml` goes one step further
+   than Ada's null-out-and-rely-on-a-`-gnata`-precondition approach: the
+   `node` record gained a third field, a mutable `consumed?` flag (not
+   just nulling `handle`, though that happens too, for parity with Ada's
+   own `N := Null_Node`), checked by `check-node-live!` -- the single
+   guard every accessor already called first — so a consumed node raises
+   the new `(exn slibfyaml consumed)` condition on any further use,
+   rather than either touching freed memory or merely reading back as
+   `node-valid?` = `#f` with no explanation why. One shared edit point
+   (`check-node-live!`) was enough; no accessor body needed touching.
 5. **Anchors/resolve**: `document-resolve!`, `node-alias?`, `node-tag`,
    `resolve-anchors?` on parse. `test-anchors`.
 6. **Multi-document streaming**: `(slibfyaml documents streams)`, the

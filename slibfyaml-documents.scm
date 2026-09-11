@@ -27,6 +27,15 @@
    document-parse-string
    document-parse-file
    document-root
+   document-set-root!
+   document-insert-at!
+   document-create-scalar
+   document-create-sequence
+   document-create-mapping
+   document->yaml-string
+   document-write-to-file!
+   emit-default emit-sort-keys
+   emit-mode-block emit-mode-flow emit-mode-flow-oneline emit-mode-json
    document-destroy!
    with-document
 
@@ -209,6 +218,125 @@
   (node-wrap (fy_document_root (document-handle doc)) (document-liveness-box doc)))
 ;; The document's root node, or null-node if the document has none yet
 ;; -- same as alibfyaml's Root.
+
+;;;; Build
+
+(define (document-set-root! doc n)
+  (check-document-live! doc)
+  (check-node-live! n)
+  (let ((status (fy_document_set_root (document-handle doc) (node-raw n))))
+    (when (not (= status 0))
+      (error "slibfyaml: fy_document_set_root failed" doc n))))
+;; Make n (typically freshly built via document-create-scalar/-sequence/
+;; -mapping below) the document's root node -- same as alibfyaml's
+;; Set_Root. Unlike document-insert-at!, n is attached outright, not
+;; merged: fy_document_set_root's own header documents no unref of n
+;; (only that the *previous* root, if any, is freed) -- n is NOT
+;; consumed, and remains valid and usable afterward. A nonzero status
+;; is a plain (error ...), not a slibfyaml condition, matching
+;; alibfyaml's own choice of a generic Program_Error here rather than
+;; one of its five domain exceptions -- this "shouldn't happen" given a
+;; live document and a live node, the same class of internal-invariant
+;; failure as node-kind's own unknown-fy_node_get_type-result error.
+
+(define (document-insert-at! doc path n)
+  (check-document-live! doc)
+  (check-node-live! n)
+  (let ((status (fy_document_insert_at (document-handle doc) path
+                                        (string-length path) (node-raw n))))
+    (set-node-raw! n #f)
+    (set-node-consumed?! n #t)
+    (when (not (= status 0))
+      (error "slibfyaml: fy_document_insert_at failed for path" path))))
+;; Insert/replace the node at path (libfyaml native path syntax, e.g.
+;; "/server") with n, following libfyaml's fy_node_insert merge rules
+;; (a scalar overwrites the target; a sequence/mapping n is appended
+;; into an existing sequence/mapping target rather than replacing it
+;; outright) -- same as alibfyaml's Insert_At.
+;;
+;; n is ALWAYS consumed by this call -- libfyaml's header is explicit
+;; that the node is unconditionally unref'ed, on both success and
+;; failure, and freed outright if that drops its reference count to
+;; zero. A freshly-built n (document-create-scalar/-sequence/-mapping,
+;; not yet attached anywhere else) has no other reference, so this
+;; applies on success just as much as on failure -- ported directly
+;; from a bug alibfyaml already hit and confirmed live with valgrind:
+;; an earlier version of that binding only nulled its own N out on
+;; failure, and a "successful" merge left N pointing at memory libfyaml
+;; had already freed (masked without valgrind, since the freed bytes
+;; happened to still look plausible). n's raw handle and consumed? flag
+;; are therefore both updated here unconditionally, before even
+;; checking status: any further accessor call on n raises
+;; (exn slibfyaml consumed) instead of touching freed memory. If the
+;; attached result is needed, re-fetch it from path via node-by-path --
+;; never assume n itself still holds anything. Like document-set-root!,
+;; a nonzero status is a plain (error ...), matching alibfyaml's own
+;; Program_Error choice here.
+
+(define (document-create-scalar doc value)
+  (check-document-live! doc)
+  (let* ((len (string-length value))
+         (buf (c-malloc len)))
+    (move-memory! value buf len)
+    (let ((result (fy_node_create_scalar_copy (document-handle doc) buf len)))
+      (c-free buf)
+      (node-wrap result (document-liveness-box doc)))))
+;; Build a new scalar node holding a copy of value -- same as
+;; alibfyaml's Create_Scalar. buf only needs to survive this one call:
+;; fy_node_create_scalar_copy's own "_copy" name (confirmed against the
+;; installed header) means libfyaml copies the bytes internally, unlike
+;; document-parse-string's buf, which the resulting document keeps
+;; zero-copy references into for its entire lifetime -- so buf is freed
+;; right after the call, not retained in the document record. The node
+;; is not yet attached to the tree; attach it with document-set-root!,
+;; document-insert-at!, node-append!, or node-append-pair!.
+
+(define (document-create-sequence doc)
+  (check-document-live! doc)
+  (node-wrap (fy_node_create_sequence (document-handle doc)) (document-liveness-box doc)))
+
+(define (document-create-mapping doc)
+  (check-document-live! doc)
+  (node-wrap (fy_node_create_mapping (document-handle doc)) (document-liveness-box doc)))
+
+;;;; Emit
+
+(define emit-default (foreign-value "FYECF_DEFAULT" unsigned-int))
+(define emit-sort-keys (foreign-value "FYECF_SORT_KEYS" unsigned-int))
+(define emit-mode-block (foreign-value "FYECF_MODE_BLOCK" unsigned-int))
+(define emit-mode-flow (foreign-value "FYECF_MODE_FLOW" unsigned-int))
+(define emit-mode-flow-oneline (foreign-value "FYECF_MODE_FLOW_ONELINE" unsigned-int))
+(define emit-mode-json (foreign-value "FYECF_MODE_JSON" unsigned-int))
+;; Same subset alibfyaml binds, out of libfyaml's much larger emitter-
+;; config flag set (width/indent controls, comment/tag/label-stripping,
+;; document-marker controls, etc.) -- bind exactly what's needed, same
+;; discipline as the C function surface itself. Combine with CHICKEN's
+;; own bitwise-ior-on-fixnums (e.g. `(chicken fixnum)`'s `fxior`), e.g.
+;; (fxior emit-sort-keys emit-mode-block) -- these are plain integers,
+;; not a distinct flags type, so slibfyaml doesn't need its own
+;; combinator on top.
+
+(define (document->yaml-string doc #!optional (flags emit-default))
+  (check-document-live! doc)
+  (let ((ptr (fy_emit_document_to_string (document-handle doc) flags)))
+    (if (not ptr)
+        (raise-emit-error "fy_emit_document_to_string failed")
+        (let ((s (nul-terminated-c-string-at ptr)))
+          (c-free ptr)
+          s))))
+;; Emit doc to a string -- same as alibfyaml's To_YAML. Unlike
+;; node-scalar-value's zero-copy spans, fy_emit_document_to_string
+;; hands back a genuinely NUL-terminated, freshly allocated buffer (per
+;; its own header, caller must free it) -- nul-terminated-c-string-at
+;; is the right decoder here, not decode-c-string.
+
+(define (document-write-to-file! doc path #!optional (flags emit-default))
+  (check-document-live! doc)
+  (let ((status (fy_emit_document_to_file (document-handle doc) flags path)))
+    (when (not (= status 0))
+      (raise-emit-error
+       (string-append "fy_emit_document_to_file failed for \"" path "\"")))))
+;; Emit doc to the file at path -- same as alibfyaml's Write_To_File.
 
 ;;;; Destruction
 

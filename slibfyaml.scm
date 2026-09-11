@@ -22,6 +22,8 @@
    raise-use-after-free
    raise-missing-key
    raise-data-error
+   raise-emit-error
+   raise-consumed
    )
 
 (import scheme)
@@ -76,5 +78,25 @@
 ;; rationale as raise-missing-key above. 'line/'column (from
 ;; node-location, when available) are deferred to Phase 8, which is
 ;; where node-location/node-has-location? are introduced.
+
+(define (raise-emit-error message)
+  (abort (slibfyaml-condition 'emit message)))
+;; Raised by document->yaml-string/document-write-to-file! when
+;; fy_emit_document_to_string/_file fails. Same as alibfyaml's
+;; Emit_Error.
+
+(define (raise-consumed message)
+  (abort (slibfyaml-condition 'consumed message)))
+;; Raised by a (slibfyaml nodes) accessor called on a node already
+;; handed to document-insert-at!, which unconditionally consumes its
+;; node argument (see slibfyaml-documents.scm's own comment on
+;; document-insert-at! for why, ported from alibfyaml's own confirmed
+;; Insert_At use-after-free bug). Has no Ada equivalent as a raised
+;; condition -- Ada catches the equivalent mistake at compile time via
+;; a `-gnata` precondition on a Node already nulled to Null_Node
+;; instead, per PLAN.md's "Node validity after its Document is gone".
+;; Distinct from use-after-free above: "your document is gone" and
+;; "you already handed this specific node to document-insert-at!" are
+;; different mistakes with different fixes.
 
 ) ;; module

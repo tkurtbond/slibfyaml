@@ -5,7 +5,9 @@
 *.build.sh
 *.install.sh
 .chicken-install/
+tests/test-mutate
 tests/test-navigate
 tests/test-quickstart
 tests/test-scalars
 tests/test-thin
+tests/mutate-output.yaml

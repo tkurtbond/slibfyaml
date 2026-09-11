@@ -41,6 +41,8 @@
    node-integer? node-float? node-boolean?
    node-integer-value node-float-value node-boolean-value node-string-value
 
+   node-append! node-append-pair!
+
    ;; Binding-internal: bridges to/from the raw Thin handle and the
    ;; shared liveness box. Used by (slibfyaml documents) and (later)
    ;; (slibfyaml documents streams); not needed by ordinary callers of
@@ -48,6 +50,9 @@
    node-wrap
    node-raw
    node-owner-box
+   set-node-raw!
+   set-node-consumed?!
+   check-node-live!
    )
 
 (import scheme)
@@ -66,10 +71,13 @@
 ;;;; The node handle itself
 
 (define-record-type node
-  (make-node handle owner-box)
+  (%make-node handle owner-box consumed?)
   node?
-  (handle node-raw)
-  (owner-box node-owner-box))
+  (handle node-raw set-node-raw!)
+  (owner-box node-owner-box)
+  (consumed? node-consumed? set-node-consumed?!))
+
+(define (make-node handle owner-box) (%make-node handle owner-box #f))
 
 (define null-node (make-node #f #f))
 ;; The "no node" handle: returned by lookups that find nothing. Has no
@@ -86,23 +94,32 @@
 ;; (node-valid?), matching alibfyaml's own Wrap.
 
 (define (node-valid? n) (and (node-raw n) #t))
-;; True unless N is null-node. Independent of, and checked separately
-;; from, owner-liveness below -- a null-handle check and an "is my
-;; owner still alive" check are different failure modes (see
-;; PLAN.md's Error handling section on why missing-key/data get a
-;; distinct 'consumed condition kind from 'use-after-free, the same
-;; reasoning applies to this null-check/liveness-check split).
+;; True unless N is null-node -- also true, misleadingly, right after
+;; document-insert-at! consumes N (see below), same as it's already
+;; misleading right after N's owning document is destroyed: node-valid?
+;; is deliberately a cheap null-handle check only, independent of and
+;; checked separately from both owner-liveness and consumption below --
+;; three different failure modes, matching PLAN.md's Error handling
+;; section on why missing-key/data/use-after-free/consumed are all
+;; distinct condition kinds rather than one.
 
 (define (check-node-live! n)
+  (when (node-consumed? n)
+    (raise-consumed
+     "node used after being consumed by document-insert-at!"))
   (let ((box (node-owner-box n)))
     (when (and box (not (vector-ref box 0)))
       (raise-use-after-free
        "node used after its owning document was destroyed"))))
-;; null-node and any node with no owner (none exist yet as of this
-;; module -- (slibfyaml documents)'s freshly-built-but-not-yet-attached
-;; nodes will, once Create_Scalar/_Sequence/_Mapping exist) skip this
-;; check and fall through to node-valid?'s null-handle check instead,
-;; per PLAN.md's design: the two checks are independent, not layered.
+;; The single guard every accessor below calls first -- checks
+;; consumption before owner-liveness, since a consumed node's handle
+;; has already been nulled by document-insert-at! regardless of which
+;; document it came from. null-node and any node with no owner (a
+;; freshly-built-but-not-yet-attached node from document-create-scalar/
+;; -sequence/-mapping still has one -- see slibfyaml-documents.scm)
+;; are never consumed and skip the owner-liveness check too, falling
+;; through to node-valid?'s null-handle check instead, per PLAN.md's
+;; design: all of these checks are independent, not layered.
 
 ;;;; Node kind
 
@@ -156,6 +173,20 @@
 ;; than raising, passing through libfyaml's own out-of-range behavior
 ;; for this lookup, same as alibfyaml.
 
+(define (node-append! seq item)
+  (check-node-live! seq)
+  (check-node-live! item)
+  (assert (node-sequence? seq) "node-append!: not a sequence node" seq)
+  (let ((status (fy_node_sequence_append (node-raw seq) (node-raw item))))
+    (when (not (= status 0))
+      (error "slibfyaml: fy_node_sequence_append failed" seq item))))
+;; Append item (typically freshly built via document-create-scalar/
+;; -sequence/-mapping) to the end of the seq sequence -- same as
+;; alibfyaml's Append. Unlike document-insert-at!, item is attached
+;; outright, not merged: fy_node_sequence_append's own header documents
+;; no unref of it, so item is NOT consumed -- it remains a perfectly
+;; usable node afterward, reading back exactly what was built.
+
 (define (node-iterate-items seq visit)
   (check-node-live! seq)
   (assert (node-sequence? seq) "node-iterate-items: not a sequence node" seq)
@@ -202,6 +233,21 @@
 ;; if the mapping has no such key -- same as alibfyaml's Value.
 
 (define (node-has-key? map key) (node-valid? (node-value map key)))
+
+(define (node-append-pair! map key value)
+  (check-node-live! map)
+  (check-node-live! key)
+  (check-node-live! value)
+  (assert (node-mapping? map) "node-append-pair!: not a mapping node" map)
+  (let ((status (fy_node_mapping_append (node-raw map) (node-raw key) (node-raw value))))
+    (when (not (= status 0))
+      (error "slibfyaml: fy_node_mapping_append failed" map key value))))
+;; Append a (key, value) pair (typically freshly built via
+;; document-create-scalar/-sequence/-mapping) to the end of the map
+;; mapping -- same as alibfyaml's Append_Pair. Unlike
+;; document-insert-at!, key and value are attached outright, not
+;; merged: fy_node_mapping_append's own header documents no unref of
+;; either, so neither is consumed -- both remain usable afterward.
 
 ;;;; Path access
 
