@@ -67,8 +67,9 @@
 ;; section: alibfyaml's own Missing_Key carries only a bare message,
 ;; this goes further since CHICKEN conditions make it cheap to.
 
-(define (raise-data-error message path)
-  (abort (slibfyaml-condition 'data message 'path path)))
+(define (raise-data-error message path line column)
+  (abort (slibfyaml-condition 'data message 'path path
+                               'line line 'column column)))
 ;; Raised by every typed scalar accessor (node-integer-value and
 ;; friends) for a shape or grammar mismatch -- non-scalar value, text
 ;; that doesn't match the target type's grammar, or (for float) a
@@ -76,9 +77,12 @@
 ;; bare diagnostic text alibfyaml's own Data_Error carries (e.g. "not a
 ;; valid integer: \"banana\""); 'path -- (node-path n), always
 ;; available -- is attached as a structured field on top, same
-;; rationale as raise-missing-key above. 'line/'column (from
-;; node-location, when available) are deferred to Phase 8, which is
-;; where node-location/node-has-location? are introduced.
+;; rationale as raise-missing-key above. 'line/'column are the node's
+;; own (node-location n) when the offending node is a scalar with a
+;; real location (see slibfyaml-nodes.scm's node-has-location?), else
+;; both #f -- e.g. a "not a scalar value" mismatch has no scalar token
+;; to report a position for at all, the same gap node-location's own
+;; Ada precondition documents.
 
 (define (raise-emit-error message)
   (abort (slibfyaml-condition 'emit message)))

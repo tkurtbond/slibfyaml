@@ -10,30 +10,33 @@ handles, emit it back out — rather than converting the whole document
 into a native Scheme value up front the way the existing `yaml` and
 `libyaml` Chicken eggs do.
 
-**Status: Phases 1-7 done** (skeleton; read-only parse + navigate;
+**Status: Phases 1-8 done** (skeleton; read-only parse + navigate;
 typed scalars; build + emit + mutate; anchors/resolve; multi-document
-streaming; value-materializing API) — see `PLAN.md`'s Phased roadmap
-for each phase's own writeup. In short: parsing
-(`document-parse-string`/`-parse-file`), full read-only tree
+streaming; value-materializing API; diagnostics polish) — see
+`PLAN.md`'s Phased roadmap for each phase's own writeup. In short:
+parsing (`document-parse-string`/`-parse-file`), full read-only tree
 navigation, all seven condition kinds
 (`parse`/`use-after-free`/`missing-key`/`data`/`emit`/`consumed`/
-`resolve`), the full typed-scalar family (core schema plus the `0b`/`_`
-extensions), building/mutating/emitting a document
-(`document-create-*`/`node-append!`/`node-append-pair!`/
+`resolve`, `data` now carrying `'line`/`'column` alongside `'path`
+where a location is available), the full typed-scalar family (core
+schema plus the `0b`/`_` extensions), building/mutating/emitting a
+document (`document-create-*`/`node-append!`/`node-append-pair!`/
 `document-insert-at!`/`document->yaml-string`/`-write-to-file!`),
 anchor/alias/merge-key resolution (`document-resolve!`, `node-alias?`,
 `node-tag`), multi-document streaming (`(slibfyaml documents streams)`,
 including the refcounted buffer-sharing fix a document drawn from a
-string-backed stream needs to outlive that stream safely), and the
+string-backed stream needs to outlive that stream safely), the
 value-materializing convenience API (`(slibfyaml scheme)`'s
-`node->scheme`/`load-string`/`load-file`) all work end to end.
-Confirmed via `tests/test-*.scm` (one file per concern, 9 files so far,
-all passing and leak/error-free under valgrind — including through
-every deliberate failure path each one exercises, and one genuinely new
-libfyaml bug found and worked around along the way, not just bugs
-`alibfyaml` had already found — see PLAN.md's Phase 7 writeup) under
-both CHICKEN 5.4.0 and 6.0.0. Remaining: diagnostics/packaging polish —
-see `PLAN.md`'s Phased roadmap.
+`node->scheme`/`load-string`/`load-file`), and source-location access
+(`node-location`/`node-has-location?`, plus gcc-style
+`"file:line:col: error: ..."` parse-error formatting, done since Phase
+2) all work end to end. Confirmed via `tests/test-*.scm` (one file per
+concern, 11 files so far, all passing and leak/error-free under
+valgrind — including through every deliberate failure path each one
+exercises, and one genuinely new libfyaml bug found and worked around
+along the way, not just bugs `alibfyaml` had already found — see
+PLAN.md's Phase 7 writeup) under both CHICKEN 5.4.0 and 6.0.0.
+Remaining: packaging polish — see `PLAN.md`'s Phased roadmap.
 
 ## Scope
 
@@ -95,8 +98,9 @@ parser, no separate typed-scalar logic. See PLAN.md's
   since Phase 4, consumption tracking too (a node already handed to
   `document-insert-at!` raises `consumed` on further use, the same
   way). Typed scalar accessors (Phase 3), mutation (`node-append!`
-  etc., Phase 4), and anchors/tags (`node-alias?`/`node-tag`, Phase 5)
-  all live here too.
+  etc., Phase 4), anchors/tags (`node-alias?`/`node-tag`, Phase 5), and
+  source location (`node-location`/`node-has-location?`, Phase 8) all
+  live here too.
 - `slibfyaml-documents.scm` — **done.** `document`: the owner of a
   parsed tree, with explicit `document-destroy!` (idempotent) plus a
   GC finalizer as a backstop, never RAII (CHICKEN has none). A

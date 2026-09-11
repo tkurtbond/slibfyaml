@@ -37,6 +37,7 @@
    node-iterate-items node-iterate-pairs
    node-by-path node-path
    node-alias? node-tag
+   node-has-location? node-location
 
    node-null-value?
    node-integer? node-float? node-boolean?
@@ -314,6 +315,52 @@
 ;; a zero-copy span (not necessarily NUL-terminated at length), hence
 ;; decode-c-string rather than nul-terminated-c-string-at.
 
+;;;; Source location
+
+;; struct fy_mark's own fields (input_pos/line/column, per the header),
+;; peeked the same small-C-snippet way (slibfyaml-documents.scm)'s
+;; diag-error-* accessors peek struct fy_diag_error -- only line/column
+;; are actually used. NULL is never passed here: node-location always
+;; checks node-has-location? first, at every call site.
+(define fy-mark-line
+  (foreign-lambda* int ((c-pointer m)) "C_return(((struct fy_mark *)m)->line);"))
+(define fy-mark-column
+  (foreign-lambda* int ((c-pointer m)) "C_return(((struct fy_mark *)m)->column);"))
+
+(define (node-has-location? n)
+  (check-node-live! n)
+  (assert (node-scalar? n) "node-has-location?: not a scalar node" n)
+  (let ((tok (fy_node_get_scalar_token (node-raw n))))
+    (and tok (fy_token_start_mark tok) #t)))
+;; True if n's own scalar token (aliases count as scalar here too, per
+;; node-alias? above) carries a start location -- same as alibfyaml's
+;; Has_Location. libfyaml's header allows for a token with none
+;; ("permissable for some token types to have no start marker"), so
+;; this is a real check, not a formality -- call it before
+;; node-location rather than assuming. Also true, confirmed live, for a
+;; node built via document-create-scalar rather than parsed: its token
+;; carries a synthetic all-zero mark (node-location (1, 1) after the
+;; 1-indexing conversion below), not a NULL one -- node-has-location?
+;; alone can't tell "genuinely parsed at (1, 1)" apart from "freshly
+;; built, no real location" the same way Ada's own doc comment notes.
+
+(define (node-location n)
+  (check-node-live! n)
+  (assert (node-has-location? n) "node-location: node has no location" n)
+  (let* ((tok (fy_node_get_scalar_token (node-raw n)))
+         (mk (fy_token_start_mark tok)))
+    (values (+ 1 (fy-mark-line mk)) (+ 1 (fy-mark-column mk)))))
+;; The 1-indexed (line . column) start position of n's own scalar text
+;; in the source input, as two values -- not, for an alias node, the
+;; position of the `*` sigil before it; libfyaml's own token span
+;; starts at the anchor-name text, confirmed live the same way
+;; alibfyaml's Location was. libfyaml's struct fy_mark is 0-indexed
+;; (the header's own "@line: Line position (0 index based)"); this
+;; converts to 1-indexed to match ordinary editor/human expectations
+;; and this egg's existing gcc-style parse-error formatting (see
+;; slibfyaml-documents.scm's collected-errors), same as alibfyaml's own
+;; Location does for its Fy_Mark -> Node_Location conversion.
+
 ;;;; Required mapping access
 
 (define (node-required map key)
@@ -331,7 +378,7 @@
     (if (node-scalar? v)
         v
         (raise-data-error (string-append "key \"" key "\" is not a scalar value")
-                           (node-path map)))))
+                           (node-path map) #f #f))))
 ;; Like node-required, but also confirms the found value is a scalar,
 ;; raising (exn slibfyaml data) -- not a bare assert -- if it's a
 ;; sequence/mapping instead: this is a malformed-*data* problem, not a
@@ -558,30 +605,42 @@
 ;; Is_Valid-and-then-Is_Scalar precondition on Is_Integer/Is_Float/
 ;; Is_Boolean.
 
+(define (scalar-location n)
+  ;; (values line column), or (values #f #f) if n has none -- e.g. a
+  ;; freshly-built (not parsed) node, per node-has-location?'s own
+  ;; ambiguity note. n is already confirmed scalar by every caller
+  ;; below (via node-scalar-value's own assert), so node-has-location?
+  ;; itself never sees a non-scalar node here.
+  (if (node-has-location? n) (node-location n) (values #f #f)))
+
 (define (integer-value-of-node n)
   (let ((text (trimmed (node-scalar-value n))))
     (if (integer-text? text)
         (parse-integer-text text)
-        (raise-data-error (string-append "not a valid integer: \"" text "\"")
-                           (node-path n)))))
+        (let-values (((line column) (scalar-location n)))
+          (raise-data-error (string-append "not a valid integer: \"" text "\"")
+                             (node-path n) line column)))))
 
 (define (float-value-of-node n)
   (let ((text (trimmed (node-scalar-value n))))
     (if (float-text? text)
         (let ((v (parse-float-text text)))
           (if (or (= v +inf.0) (= v -inf.0))
-              (raise-data-error (string-append "float out of range: \"" text "\"")
-                                 (node-path n))
+              (let-values (((line column) (scalar-location n)))
+                (raise-data-error (string-append "float out of range: \"" text "\"")
+                                   (node-path n) line column))
               v))
-        (raise-data-error (string-append "not a valid float: \"" text "\"")
-                           (node-path n)))))
+        (let-values (((line column) (scalar-location n)))
+          (raise-data-error (string-append "not a valid float: \"" text "\"")
+                             (node-path n) line column)))))
 
 (define (boolean-value-of-node n)
   (let ((text (trimmed (node-scalar-value n))))
     (cond ((member text '("true" "True" "TRUE")) #t)
           ((member text '("false" "False" "FALSE")) #f)
-          (else (raise-data-error (string-append "not a valid boolean: \"" text "\"")
-                                   (node-path n))))))
+          (else (let-values (((line column) (scalar-location n)))
+                  (raise-data-error (string-append "not a valid boolean: \"" text "\"")
+                                     (node-path n) line column))))))
 ;; Raise (exn slibfyaml data) if the scalar text doesn't match the
 ;; target type's grammar (including a float literal that overflows a
 ;; double to infinity) -- same as alibfyaml's Data_Error, plus the
@@ -609,7 +668,7 @@
     (cond ((not (node-valid? v)) default)
           ((not (node-scalar? v))
            (raise-data-error (string-append "key \"" key "\" is not a scalar value")
-                              (node-path map)))
+                              (node-path map) #f #f))
           (else (convert v)))))
 ;; Optional (Map, Key, Default) form: Default only substitutes for
 ;; Key's *absence* -- a present-but-malformed or present-but-non-scalar

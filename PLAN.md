@@ -1233,9 +1233,95 @@ before writing the first test file):
    an explicit escape hatch for inspecting the raw tree, where "not
    conclusively null" is the honest, safe answer for an alias either
    way.
-8. **Diagnostics polish**: gcc-style `Parse_Error` formatting,
-   `node-location`/`node-has-location?`, `test-parse-errors`/
-   `test-location`.
+8. **`[done]` Diagnostics polish**: gcc-style `Parse_Error` formatting
+   was already delivered back in Phase 2 (`collected-errors` in
+   `slibfyaml-documents.scm` already builds one
+   `"file:line:column: error: msg"` line per collected libfyaml error)
+   — confirmed still true and covered by the new `test-parse-errors`
+   below, not redone. The phase's actual new work: `node-location`/
+   `node-has-location?` in `slibfyaml-nodes.scm`, ported directly from
+   `Libfyaml.Nodes.Location`/`Has_Location` (`fy_node_get_scalar_token`
+   + `fy_token_start_mark`, both already declared in the thin layer
+   since Phase 1) — peeking `struct fy_mark`'s `line`/`column` fields
+   the same small-C-snippet `foreign-lambda*` way
+   `slibfyaml-documents.scm`'s own `diag-error-*` accessors already
+   peek `struct fy_diag_error`, converting libfyaml's own 0-indexed
+   mark to 1-indexed to match this egg's existing gcc-style
+   parse-error formatting (and ordinary editor/human expectations),
+   same as `alibfyaml`'s own conversion. `node-location` returns two
+   values (`line`, `column`) rather than a record, the more idiomatic
+   Scheme shape for what Ada represents as a two-field `Node_Location`
+   record.
+
+   `(exn slibfyaml data)`'s `'line`/`'column` fields, deferred from
+   Phase 3 specifically pending `node-location`'s existence (see that
+   phase's own writeup and the two call-site comments this closes
+   out), are wired up now: `raise-data-error` in `slibfyaml.scm`
+   changed from a 2-arg (`message path`) to a 4-arg (`message path line
+   column`) signature — plain required args, not `#!optional`, so
+   `(slibfyaml)` doesn't need to start importing `(chicken base)` just
+   for this — and all 6 call sites in `slibfyaml-nodes.scm` updated:
+   the 3 scalar-grammar-mismatch sites (`integer-value-of-node`/
+   `float-value-of-node`/`boolean-value-of-node`) pass a real
+   `(scalar-location n)` result (a small private helper wrapping
+   `node-has-location?`/`node-location`, since `n` is already confirmed
+   scalar by every caller there); the 2 "key ... is not a scalar
+   value" sites pass `#f #f`, since the offending value there is
+   non-scalar and has no scalar token to report a position for at
+   all — the same gap `node-has-location?`'s own doc comment already
+   covers, not a new limitation introduced here.
+
+   `test-location` (15 checks) ports `alibfyaml`'s own
+   `test_location.adb` line for line, using a new
+   `tests/location.yaml` fixture copied from `alibfyaml`'s own:
+   `node-has-location?`/`node-location` on three ordinary keys
+   (including an empty/omitted scalar, which still carries a real,
+   zero-width location, not a missing one), on `anchors.yaml`'s
+   existing unresolved alias node (confirmed live, same as `alibfyaml`
+   found: the location is of the alias's own anchor-name text, column
+   8, not the `*` sigil at column 7), and on a freshly-built
+   (`document-create-scalar`) node — `node-has-location?` is `#t` there
+   too (a synthetic all-zero mark, not a `NULL` one) but `node-location`
+   is the fixed `(1, 1)`, not a real source position; pinned down here
+   the same reason `alibfyaml`'s own test pins it down, so a future
+   change to the underlying libfyaml call can't silently start
+   returning something else unnoticed. 15/15 checks pass, confirmed
+   leak/error-free under valgrind.
+
+   `test-parse-errors` ports `alibfyaml`'s own `test_parse_errors.adb`
+   — there, a regression test for a `Parse_Common` double-free hit on
+   *every* single parse failure (see that file's own header comment);
+   this binding's `parse-common` already destroys its `fy_diag` exactly
+   once on every path (see Phase 2's own writeup, "matching alibfyaml's
+   own Parse_Common... rather than risking the double-destroy bug
+   alibfyaml hit once"), ported in with the fix already known rather
+   than rediscovered, so this specific bug class was never actually
+   present here — confirmed clean under valgrind on the first attempt,
+   not after finding it the hard way. The test still earns its place:
+   it's the only place covering `document-parse-file` (not just
+   `-parse-string`) on malformed input, the message's non-emptiness, a
+   second independent failure right after the first (confirming no
+   cross-call `fy_diag` state survives to corrupt), and successful
+   parsing after both — using a new `tests/malformed.yaml` fixture
+   copied from `alibfyaml`'s own. Goes one step further than the Ada
+   original where this binding's condition already can: `alibfyaml`'s
+   `Parse_Error` carries only a message string (an Ada exception has no
+   structured fields), so its test greps the message text for the file
+   field; here the `'parse` condition kind's own `'file` property
+   (already existing since Phase 2) is checked directly instead. 7/7
+   checks pass, confirmed leak/error-free under valgrind.
+
+   Not built, confirmed out of scope rather than merely deferred, per
+   `alibfyaml`'s own `test_location.adb` header comment (re-verified
+   against the same libfyaml header linked here): `FYPCF_CREATE_MARKERS`
+   (no such flag exists — ordinary parsing already produces marks, no
+   opt-in needed) and `fy_node_get_start_token` (the real name is
+   `fy_node_get_scalar_token`, scalar-only — there is no generic "start
+   token of any node" for a sequence/mapping node). A node's tag
+   location (`fy_node_get_tag_token`) and a token's *end* mark are
+   natural, cheap follow-ons if a concrete need ever shows up, same as
+   `alibfyaml` notes for its own scope — not built here since nothing
+   currently needs them.
 9. **Packaging**: finalize `.egg` metadata, license, README examples
    matching the finished API, submit to CHICKEN's egg index if
    desired.

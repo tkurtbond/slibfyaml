@@ -2,10 +2,12 @@
 ;;
 ;; slibfyaml.egg -- CHICKEN egg-information for slibfyaml.
 ;;
-;; Through Phase 7 (value-materializing API): (slibfyaml thin),
+;; Through Phase 8 (diagnostics polish): (slibfyaml thin),
 ;; (slibfyaml), (slibfyaml nodes), (slibfyaml documents),
 ;; (slibfyaml documents streams), and (slibfyaml scheme) all exist --
-;; see PLAN.md's "Phased roadmap".
+;; see PLAN.md's "Phased roadmap". Phase 8 added no new component,
+;; only node-has-location?/node-location to (slibfyaml nodes) and
+;; 'line/'column fields on (exn slibfyaml data) in (slibfyaml).
 ;;
 ;; No explicit intra-egg dependency declaration between components is
 ;; needed here, confirmed live by testing both ways: chicken-install
