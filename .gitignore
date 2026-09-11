@@ -6,9 +6,11 @@
 *.install.sh
 .chicken-install/
 tests/test-anchors
+tests/test-buffer-lifetime
 tests/test-mutate
 tests/test-navigate
 tests/test-quickstart
 tests/test-scalars
+tests/test-streams
 tests/test-thin
 tests/mutate-output.yaml

@@ -1113,9 +1113,64 @@ before writing the first test file):
    `fy_document_diag_vreport`) — not a defect in this binding, nothing
    to fix on this side, same conclusion `alibfyaml` already reached
    against the same libfyaml build.
-6. **Multi-document streaming**: `(slibfyaml documents streams)`, the
-   no-recovery-after-parse-error behavior, buffer-sharing via the
-   refcounted-copy design. `test-streams`, `test-buffer-lifetime`.
+6. **`[done]` Multi-document streaming**: `(slibfyaml documents
+   streams)` — `document-stream-open-string`/`-open-file`,
+   `document-stream-has-next?`/`-next!`, `document-stream-destroy!`,
+   `with-document-stream`. `test-streams` ports most of `alibfyaml`'s
+   own `test_streams.adb` (file-stream/string-stream/empty/single-
+   document/mid-stream-parse-error scenarios, 19 checks);
+   `test-buffer-lifetime` gets its own dedicated file (per this
+   section's own earlier call for one) covering the one scenario that
+   took `alibfyaml` a real, valgrind-caught use-after-free to find: a
+   document drawn from a string-backed stream, still correctly
+   readable after that stream is destroyed. Both confirmed leak/
+   error-free under valgrind, including that exact scenario, on the
+   first implementation attempt (the fix was ported in from reading
+   `alibfyaml`'s history first, not rediscovered the hard way here).
+
+   The refcounted buffer-ref design was implemented exactly as
+   sketched above, with one refinement found live: `alibfyaml`'s own
+   `Document.Owned_Buffer` is UNIFORMLY a refcounted `Buffer_Ref` —
+   even plain `Parse_String`'s (count starts at 1, released as its sole
+   holder's own `Document` is finalized) — not a bare pointer for the
+   non-shared case and a refcounted one only for streams. Matched here:
+   `document-parse-string`'s own buffer is now wrapped the same
+   `buffer-ref` way `document-stream-open-string`'s is (Phase 2's
+   original bare-pointer `document-destroy!` was refactored to release
+   through this one path uniformly), and a new `document-wrap`
+   helper factors out the make-record-plus-set-finalizer! pattern both
+   `document-parse-string`/`-file` and `document-stream-next!` need,
+   rather than duplicating it a third time.
+
+   A second, independent bug-before-it-happens finding (not present in
+   the Ada port — found by reading the real installed
+   `/usr/include/libfyaml.h` directly rather than trusting the header
+   comment inherited via the Ada translation): `fy_parser_set_input_file`
+   retains its `file` pointer *past* the call ("while the parser is in
+   use the file[name] will must be available", confirmed against the
+   header — the file is evidently opened lazily, per
+   `fy_parse_load_document` call). `slibfyaml-thin.scm`'s own Phase-1
+   declaration for this had typed that parameter `c-string` — CHICKEN's
+   transient marshaling, valid only for the duration of one call — a
+   latent bug that simply never manifested because nothing called this
+   function until this phase. Fixed by retyping it `c-pointer` and
+   having `document-stream-open-file` manage a persistent,
+   NUL-terminated `malloc`'d copy of the path itself (a new `poke-nul!`
+   thin helper supplies the one primitive — writing a single byte at an
+   offset — `c-malloc`/`move-memory!` didn't already provide for turning
+   a copied buffer into a NUL-terminated one), the same buffer-lifetime
+   discipline `document-parse-string`'s own text buffer already used.
+   `fy_document_build_from_file`'s own `c-string` path parameter needed
+   no such change — confirmed (by both `alibfyaml` and this project
+   already) to be genuinely one-shot/immediate, unlike the streaming
+   parser's lazy-open behavior.
+
+   Streaming documents come back unresolved by default (no
+   `resolve-anchors?` parameter on `document-stream-open-string`/
+   `-open-file`, matching `alibfyaml`'s own `Open_String`/`Open_File`
+   exactly, which pass no `FYPCF_RESOLVE_DOCUMENT` flag either) — call
+   `document-resolve!` on a document drawn from a stream if anchor/
+   alias resolution is wanted.
 7. **Value-materializing API**: `(slibfyaml scheme)` — `node->scheme`,
    `load-string`/`load-file`, built on phases 2/3/6 above (needs typed
    scalars and streaming already in place). `test-scheme`.

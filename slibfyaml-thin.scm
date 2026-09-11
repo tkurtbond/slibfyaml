@@ -123,6 +123,7 @@
    make-pointer-cell
    decode-c-string
    nul-terminated-c-string-at
+   poke-nul!
    )
 
 (import scheme)
@@ -190,7 +191,21 @@
   (foreign-lambda int "fy_parser_set_string" fy_parser c-pointer size_t))
 
 (define fy_parser_set_input_file
-  (foreign-lambda int "fy_parser_set_input_file" fy_parser c-string))
+  (foreign-lambda int "fy_parser_set_input_file" fy_parser c-pointer))
+;; c-pointer, NOT c-string: the header is explicit ("while the parser
+;; is in use the file[name] will must be available") that this retains
+;; the pointer past the call -- confirmed independently of alibfyaml
+;; (whose own Ada binding found the identical hazard the hard way, via
+;; a real use-after-free) by reading /usr/include/libfyaml.h directly.
+;; CHICKEN's c-string marshaling is transient (valid only for the
+;; duration of one call, per this module's own header comment on
+;; fy_node_get_scalar/fy_node_get_tag's zero-copy-span rationale) --
+;; unlike fy_document_build_from_file's own c-string param just above,
+;; which genuinely is one-shot/immediate (confirmed by both alibfyaml
+;; and this project already). (slibfyaml documents streams) is
+;; responsible for handing this a persistent, NUL-terminated malloc'd
+;; buffer it manages itself, the same idiom (slibfyaml documents)
+;; already uses for document-parse-string's own text buffer.
 
 (define fy_parse_load_document
   (foreign-lambda fy_document "fy_parse_load_document" fy_parser))
@@ -360,6 +375,16 @@
 ;; which would either stop early or read past the intended span. Same
 ;; idiom the existing `yaml` egg's own `scalar-value` already uses
 ;; against real libyaml event data.
+
+(define poke-nul!
+  (foreign-lambda* void ((c-pointer p) (size_t offset)) "((char *)p)[offset] = 0;"))
+;; Writes a single NUL byte at p[offset] -- the one primitive missing
+;; to turn a c-malloc'd + move-memory!'d buffer into a persistent,
+;; NUL-terminated C string of a caller-chosen lifetime (unlike
+;; CHICKEN's own c-string argument marshaling, which is transient).
+;; Used by (slibfyaml documents streams) for fy_parser_set_input_file's
+;; path argument -- see this file's own comment on that binding for why
+;; a transient c-string won't do there.
 
 (define nul-terminated-c-string-at
   (foreign-lambda* c-string ((c-pointer p)) "C_return(p);"))

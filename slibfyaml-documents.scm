@@ -40,11 +40,16 @@
    document-destroy!
    with-document
 
-   ;; Binding-internal: for (slibfyaml documents streams), once it
-   ;; exists, to share this module's Diag-collection/Parse_Cfg-building
-   ;; logic and to attach documents it produces to the same kind of
-   ;; liveness box. Not needed by ordinary callers of this module.
+   ;; Binding-internal: for (slibfyaml documents streams) to share this
+   ;; module's Diag-collection/Parse_Cfg-building logic, its refcounted
+   ;; buffer-sharing machinery, and to build documents the same way
+   ;; document-parse-string/-file do. Not needed by ordinary callers of
+   ;; this module.
    document-liveness-box
+   document-wrap
+   make-parse-cfg
+   collected-errors
+   buffer-ref? make-buffer-ref buffer-ref-retain! buffer-ref-release!
    )
 
 (import scheme)
@@ -59,14 +64,72 @@
 
 (foreign-declare "#include <libfyaml.h>")
 
+;;;; Refcounted buffer sharing
+;;;;
+;;;; A malloc'd C buffer that can be shared by more than one owner --
+;;;; today, a document-stream and every document drawn from it via
+;;;; document-stream-next! (see slibfyaml-documents-streams.scm's own
+;;;; header comment for why: fy_parser_set_string doesn't copy its
+;;;; input, so the buffer backs every document's scalars, not just the
+;;;; stream's own parsing). Ported from alibfyaml's Buffer_Ref, whose
+;;;; Adjust/Finalize do this refcounting automatically on assignment
+;;;; and scope exit -- CHICKEN has neither, so buffer-ref-retain!/
+;;;; -release! are explicit calls instead: retain! once per new holder,
+;;;; release! once per holder that's done, freed only when the count
+;;;; reaches zero regardless of which holder releases last.
+;;;;
+;;;; Every document's own owned-buffer field is uniformly either #f (no
+;;;; buffer -- document-parse-file's case, and document-stream-next!'s
+;;;; own Open_File-drawn case) or a buffer-ref, even document-parse-
+;;;; string's -- never a bare pointer -- matching alibfyaml's own
+;;;; Document.Owned_Buffer, which is unconditionally a Buffer_Ref for
+;;;; the same reason: one release-on-destroy code path regardless of
+;;;; whether this particular buffer ever ends up shared.
+
+(define-record-type buffer-ref
+  (make-buffer-ref-record count-box ptr)
+  buffer-ref?
+  (count-box buffer-ref-count-box)
+  (ptr buffer-ref-ptr))
+
+(define (make-buffer-ref ptr) (make-buffer-ref-record (vector 1) ptr))
+
+(define (buffer-ref-retain! ref)
+  (vector-set! (buffer-ref-count-box ref) 0
+               (+ 1 (vector-ref (buffer-ref-count-box ref) 0)))
+  ref)
+;; Returns ref itself, count bumped -- CHICKEN records aren't copied
+;; implicitly the way Ada's controlled Adjust fires on assignment, so
+;; "sharing a copy" here just means handing the very same buffer-ref
+;; object to a new holder, with its count bumped once for them.
+
+(define (buffer-ref-release! ref)
+  (when ref
+    (let ((n (- (vector-ref (buffer-ref-count-box ref) 0) 1)))
+      (vector-set! (buffer-ref-count-box ref) 0 n)
+      (when (<= n 0) (c-free (buffer-ref-ptr ref))))))
+;; A no-op on #f, so every caller can call this unconditionally on
+;; whatever its own owned-buffer field holds rather than checking
+;; first.
+
 ;;;; The document handle itself
 
 (define-record-type document
   (make-document-record handle owned-buffer liveness-box)
   document?
   (handle document-handle)
-  (owned-buffer document-owned-buffer set-document-owned-buffer!)
+  (owned-buffer document-owned-buffer)
   (liveness-box document-liveness-box))
+
+(define (document-wrap handle owned-buffer)
+  (let ((doc (make-document-record handle owned-buffer (vector #t))))
+    (set-finalizer! doc document-destroy!)
+    doc))
+;; Shared by document-parse-string/-file below and by
+;; slibfyaml-documents-streams.scm's document-stream-next! -- builds a
+;; document with a fresh liveness box and the GC-finalizer backstop
+;; every document needs, so neither caller has to repeat that
+;; boilerplate or risk the two drifting apart.
 
 (define (document-live? doc) (vector-ref (document-liveness-box doc) 0))
 
@@ -186,28 +249,26 @@
     (move-memory! text buf len)
     (handle-exceptions exn
       (begin (c-free buf) (abort exn))
-      (let* ((handle (parse-common
-                       (lambda (cfg) (fy_document_build_from_string cfg buf len))
-                       "(string-in-memory)" resolve-anchors?))
-             (doc (make-document-record handle buf (vector #t))))
-        (set-finalizer! doc document-destroy!)
-        doc))))
+      (let ((handle (parse-common
+                     (lambda (cfg) (fy_document_build_from_string cfg buf len))
+                     "(string-in-memory)" resolve-anchors?)))
+        (document-wrap handle (make-buffer-ref buf))))))
 ;; buf is copied from text (never a pointer into text itself, per the
-;; buffer-lifetime design above) and kept alive in Owned_Buffer for
-;; exactly as long as doc is, freed in document-destroy!. On a parse
-;; failure, buf would otherwise leak (nothing would ever own or free
-;; it, since no document gets built) -- freed explicitly on that path
-;; before re-raising, the same double-free-vs-leak class of mistake
-;; alibfyaml's own Parse_Common bug was, guarded against here from the
-;; start rather than found later.
+;; buffer-lifetime design above) and kept alive, wrapped in a fresh
+;; buffer-ref (count 1, released -- and, since nothing else ever
+;; retains this particular one, thereby freed -- in document-destroy!)
+;; for exactly as long as doc is. On a parse failure, buf would
+;; otherwise leak (nothing would ever own or free it, since no document
+;; gets built) -- freed explicitly on that path before re-raising, the
+;; same double-free-vs-leak class of mistake alibfyaml's own
+;; Parse_Common bug was, guarded against here from the start rather
+;; than found later.
 
 (define (document-parse-file path #!optional (resolve-anchors? #t))
-  (let* ((handle (parse-common
-                  (lambda (cfg) (fy_document_build_from_file cfg path))
-                  #f resolve-anchors?))
-         (doc (make-document-record handle #f (vector #t))))
-    (set-finalizer! doc document-destroy!)
-    doc))
+  (let ((handle (parse-common
+                 (lambda (cfg) (fy_document_build_from_file cfg path))
+                 #f resolve-anchors?)))
+    (document-wrap handle #f)))
 ;; No Owned_Buffer: libfyaml reads/mmaps the file itself, matching
 ;; alibfyaml's confirmed finding that file-based input has no
 ;; equivalent buffer-lifetime hazard.
@@ -364,11 +425,15 @@
 (define (document-destroy! doc)
   (when (document-live? doc)
     (fy_document_destroy (document-handle doc))
-    (let ((buf (document-owned-buffer doc)))
-      (when buf
-        (c-free buf)
-        (set-document-owned-buffer! doc #f)))
+    (buffer-ref-release! (document-owned-buffer doc))
     (vector-set! (document-liveness-box doc) 0 #f)))
+;; buffer-ref-release! only frees the underlying buffer once every
+;; holder (this document, and -- for one drawn from a string-backed
+;; document-stream -- that stream itself, and every other document
+;; drawn from it -- see slibfyaml-documents-streams.scm) has released
+;; its own share; a no-op if this document's owned-buffer is #f, so no
+;; guard is needed here for that case.
+;;
 ;; Idempotent: a second call (whether explicit, or the GC finalizer
 ;; firing after an explicit call already ran) is a safe no-op, never a
 ;; second fy_document_destroy/c-free -- see PLAN.md's "Document

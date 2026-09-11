@@ -10,18 +10,26 @@ handles, emit it back out — rather than converting the whole document
 into a native Scheme value up front the way the existing `yaml` and
 `libyaml` Chicken eggs do.
 
-**Status: Phase 2 (read-only parse + navigate) done.** Parsing
-(`document-parse-string`/`-parse-file`), read-only tree navigation
-(`node-kind`/predicates, `node-scalar-value`, `node-length`/`node-item`,
-`node-value`/`node-has-key?`, `node-iterate-items`/`node-iterate-pairs`,
-`node-by-path`/`node-path`), and the `use-after-free`/`parse` error
-conditions all work end to end, confirmed via `tests/test-quickstart.scm`
-and `tests/test-navigate.scm` (both passing, both leak/error-free under
-valgrind — including through the deliberate parse-failure and
-use-after-free paths) under both CHICKEN 5.4.0 and 6.0.0. No typed
-scalars yet (every check so far compares raw scalar text), and nothing
-past read-only navigation (mutation, emit, streaming, the
-value-materializing API) exists yet — see `PLAN.md`'s Phased roadmap.
+**Status: Phases 1-6 done** (skeleton; read-only parse + navigate;
+typed scalars; build + emit + mutate; anchors/resolve; multi-document
+streaming) — see `PLAN.md`'s Phased roadmap for each phase's own
+writeup. In short: parsing (`document-parse-string`/`-parse-file`),
+full read-only tree navigation, all seven condition kinds
+(`parse`/`use-after-free`/`missing-key`/`data`/`emit`/`consumed`/
+`resolve`), the full typed-scalar family (core schema plus the `0b`/`_`
+extensions), building/mutating/emitting a document
+(`document-create-*`/`node-append!`/`node-append-pair!`/
+`document-insert-at!`/`document->yaml-string`/`-write-to-file!`),
+anchor/alias/merge-key resolution (`document-resolve!`, `node-alias?`,
+`node-tag`), and multi-document streaming (`(slibfyaml documents
+streams)`, including the refcounted buffer-sharing fix a document
+drawn from a string-backed stream needs to outlive that stream safely)
+all work end to end. Confirmed via `tests/test-*.scm` (one file per
+concern, 8 files so far, all passing and leak/error-free under
+valgrind — including through every deliberate failure path each one
+exercises) under both CHICKEN 5.4.0 and 6.0.0. Remaining: the
+value-materializing convenience API (`(slibfyaml scheme)`), and
+diagnostics/packaging polish — see `PLAN.md`'s Phased roadmap.
 
 ## Scope
 
@@ -72,25 +80,37 @@ parser, no separate typed-scalar logic. See PLAN.md's
 - `slibfyaml-thin.scm` — **done.** Low-level 1:1 `foreign-lambda`
   imports over libfyaml's exported C symbols. No ownership or
   error-checking policy.
-- `slibfyaml.scm` — **done so far.** Condition types: `parse` and
-  `use-after-free` exist; `emit`, `missing-key`, `data`, `resolve`,
-  `consumed` are added in the phases that introduce the operations
-  that raise them.
-- `slibfyaml-nodes.scm` — **done for read-only access.** `node`: a
-  cheap, non-owning handle onto a tree node, with owner-liveness
-  tracking (a use-after-free on a destroyed document's node raises a
-  condition instead of reading freed memory — see PLAN.md's Memory
-  model section, the one place this binding's design goes beyond
-  `alibfyaml`'s own Ada contract). Mutation (`node-append!` etc.) is
-  Phase 4.
-- `slibfyaml-documents.scm` — **done for read-only access.**
-  `document`: the owner of a parsed tree, with explicit
-  `document-destroy!` (idempotent) plus a GC finalizer as a backstop,
-  never RAII (CHICKEN has none). Building/mutating/emitting a document
-  is Phase 4.
-- `slibfyaml-documents-streams.scm` — multi-document YAML streams.
+- `slibfyaml.scm` — **done.** All seven condition kinds exist:
+  `parse`/`use-after-free` (Phase 2), `missing-key`/`data` (Phase 3),
+  `emit`/`consumed` (Phase 4), `resolve` (Phase 5).
+- `slibfyaml-nodes.scm` — **done.** `node`: a cheap, non-owning handle
+  onto a tree node, with owner-liveness tracking (a use-after-free on a
+  destroyed document's node raises a condition instead of reading freed
+  memory — see PLAN.md's Memory model section, one of the places this
+  binding's design goes beyond `alibfyaml`'s own Ada contract) and,
+  since Phase 4, consumption tracking too (a node already handed to
+  `document-insert-at!` raises `consumed` on further use, the same
+  way). Typed scalar accessors (Phase 3), mutation (`node-append!`
+  etc., Phase 4), and anchors/tags (`node-alias?`/`node-tag`, Phase 5)
+  all live here too.
+- `slibfyaml-documents.scm` — **done.** `document`: the owner of a
+  parsed tree, with explicit `document-destroy!` (idempotent) plus a
+  GC finalizer as a backstop, never RAII (CHICKEN has none). A
+  refcounted `buffer-ref` (Phase 6) backs every document's copied input
+  buffer uniformly, shared with a document-stream and every document
+  drawn from it where that's genuinely needed. Building/mutating/
+  emitting (Phase 4) and `document-resolve!` (Phase 5) live here too.
+- `slibfyaml-documents-streams.scm` — **done.** Multi-document YAML
+  streams built on libfyaml's separate streaming-parser API — a
+  document-stream owns its own `fy_parser`/`fy_diag` and a read-ahead
+  cache; a stream opened from a string shares its buffer-ref with every
+  document drawn from it, so such a document safely outlives the
+  stream it came from (`tests/test-buffer-lifetime.scm` is the
+  dedicated regression test for exactly this, ported from a real bug
+  `alibfyaml` found the hard way with valgrind).
 - `slibfyaml-scheme.scm` — the value-materializing convenience API
-  (`node->scheme`, `load-string`, `load-file`).
+  (`node->scheme`, `load-string`, `load-file`) — not yet implemented,
+  Phase 7.
 - `tests/` — one test file per concern, ported from `alibfyaml`'s test
   suite where the same case applies.
 - `PLAN.md` — design rationale, decisions, and open questions.

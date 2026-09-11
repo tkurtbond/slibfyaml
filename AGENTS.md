@@ -34,10 +34,12 @@ csc -unit slibfyaml-thin -c -J slibfyaml-thin.scm -o slibfyaml-thin.o
 csc -unit slibfyaml -c -J slibfyaml.scm -o slibfyaml.o
 csc -unit slibfyaml-nodes -uses slibfyaml-thin -uses slibfyaml -c -J slibfyaml-nodes.scm -o slibfyaml-nodes.o
 csc -unit slibfyaml-documents -uses slibfyaml-thin -uses slibfyaml-nodes -uses slibfyaml -c -J slibfyaml-documents.scm -o slibfyaml-documents.o
+csc -unit slibfyaml-documents-streams -uses slibfyaml-thin -uses slibfyaml-documents -uses slibfyaml -c -J slibfyaml-documents-streams.scm -o slibfyaml-documents-streams.o
 ```
 
 Then, from `tests/` (see the `include` note under Test below for why
-`tests/` specifically):
+`tests/` specifically) — link in `../slibfyaml-documents-streams.o` too
+for any test that uses `(slibfyaml documents streams)`:
 
 ```sh
 csc -uses slibfyaml-thin -uses slibfyaml-nodes -uses slibfyaml-documents -uses slibfyaml \
@@ -151,17 +153,25 @@ error-free under:
 valgrind --leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=99 ./test-thin
 ```
 
-`test-quickstart`, `test-navigate`, `test-scalars`, and `test-mutate`
-are confirmed leak/error-free the same way, including through the
-exception paths (a deliberately malformed parse, a use-after-free
-triggered on purpose, every `missing-key`/`data` condition
-`test-scalars` exercises, and `test-mutate`'s `document-insert-at!`
-scenarios — the exact unconditional-consumption discipline ported from
-a bug `alibfyaml` only caught *with* valgrind in the first place) —
-those paths are exactly where a missed `c-free`/double-`c-free` is
-easiest to introduce (see `document-parse-string`'s own comment on why
-its `handle-exceptions` wrapper exists), so they're not exempt from
-this check just because they're *expected* to fail.
+`test-quickstart`, `test-navigate`, `test-scalars`, `test-mutate`,
+`test-streams`, and `test-buffer-lifetime` are confirmed leak/
+error-free the same way, including through the exception paths (a
+deliberately malformed parse, a use-after-free triggered on purpose,
+every `missing-key`/`data` condition `test-scalars` exercises,
+`test-mutate`'s `document-insert-at!` scenarios, and
+`test-streams`'s mid-stream-parse-error case) — those paths are
+exactly where a missed `c-free`/double-`c-free` is easiest to
+introduce (see `document-parse-string`'s own comment on why its
+`handle-exceptions` wrapper exists), so they're not exempt from this
+check just because they're *expected* to fail.
+
+`test-buffer-lifetime` in particular is the regression test for the
+exact use-after-free class `alibfyaml`'s own history is built around
+(a document reading correctly after the string-backed stream that
+backs its scalars is destroyed) — it came back clean under valgrind on
+the first implementation attempt here, not after finding a bug the
+hard way, because the refcounted-buffer-ref fix was ported in from
+`alibfyaml`'s own confirmed history rather than rediscovered.
 
 **One documented exception**: `test-anchors`'s merge-key-reference-loop
 case (`anchors_cycle.yaml`, resolved explicitly) does show a valgrind
