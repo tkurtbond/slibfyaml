@@ -21,3 +21,4 @@ tests/example-syntax-error
 tests/example-value-error
 tests/example-missing-field
 tests/mutate-output.yaml
+OOM_SESSION_LOG.md
