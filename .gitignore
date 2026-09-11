@@ -5,6 +5,7 @@
 *.build.sh
 *.install.sh
 .chicken-install/
+tests/test-anchors
 tests/test-mutate
 tests/test-navigate
 tests/test-quickstart

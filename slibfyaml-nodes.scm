@@ -36,6 +36,7 @@
    node-value node-has-key? node-required
    node-iterate-items node-iterate-pairs
    node-by-path node-path
+   node-alias? node-tag
 
    node-null-value?
    node-integer? node-float? node-boolean?
@@ -280,6 +281,38 @@
 ;; returns NULL for the root; the "" fallback above is purely
 ;; defensive for whatever the *documented* NULL case might be, should
 ;; it ever actually occur, not for the root specifically.
+
+;;;; Anchors, aliases, and tags
+
+(define FYNS_ALIAS (foreign-value "FYNS_ALIAS" int))
+
+(define (node-alias? n)
+  (check-node-live! n)
+  (and (node-scalar? n) (= (fy_node_get_style (node-raw n)) FYNS_ALIAS)))
+;; True if n is an unresolved alias reference (*foo): a scalar-typed
+;; node whose style is FYNS_ALIAS -- same as alibfyaml's Is_Alias, which
+;; has no exported C symbol of its own to bind (fy_node_is_alias is a
+;; "static inline" header wrapper around fy_node_get_type/
+;; fy_node_get_style, not a linkable symbol), so it's reimplemented
+;; here the same way node-scalar?/node-sequence?/node-mapping? already
+;; are. node-scalar-value on such a node returns the alias's own
+;; anchor-name text (e.g. "foo"), not the referenced content -- resolve
+;; it first, via document-parse-string/-file's resolve-anchors?
+;; parameter or an explicit document-resolve! call, to get the
+;; referenced content in its place instead.
+
+(define (node-tag n)
+  (check-node-live! n)
+  (let* ((lenp (c-malloc (foreign-type-size "size_t")))
+         (ptr (fy_node_get_tag (node-raw n) lenp))
+         (len (size_t-ref lenp)))
+    (c-free lenp)
+    (if ptr (decode-c-string ptr len) "")))
+;; n's raw explicit YAML tag text (e.g. "tag:yaml.org,2002:str", or a
+;; custom "!mytag"), or "" if n has no explicit tag -- same as
+;; alibfyaml's Tag. Like node-scalar-value, fy_node_get_tag hands back
+;; a zero-copy span (not necessarily NUL-terminated at length), hence
+;; decode-c-string rather than nul-terminated-c-string-at.
 
 ;;;; Required mapping access
 

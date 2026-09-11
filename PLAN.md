@@ -1074,8 +1074,45 @@ before writing the first test file):
    rather than either touching freed memory or merely reading back as
    `node-valid?` = `#f` with no explanation why. One shared edit point
    (`check-node-live!`) was enough; no accessor body needed touching.
-5. **Anchors/resolve**: `document-resolve!`, `node-alias?`, `node-tag`,
-   `resolve-anchors?` on parse. `test-anchors`.
+5. **`[done]` Anchors/resolve**: `document-resolve!`, `node-alias?`,
+   `node-tag` (`resolve-anchors?` on parse already existed from Phase 2).
+   `test-anchors` ports all 5 of `alibfyaml`'s own `test_anchors.adb`
+   scenarios directly, using its `anchors.yaml`/`anchors_cycle.yaml`
+   fixtures for comparability -- default-resolved parse, an explicit
+   `resolve-anchors? #f` parse followed by an explicit
+   `document-resolve!`, tag inspection, and `(exn slibfyaml resolve)`
+   on a genuine merge-key reference loop.
+
+   Nothing new needed at the thin FFI layer this phase — `document-
+   resolve!`/`node-tag` are thin wrappers around `fy_document_resolve`/
+   `fy_node_get_tag`, both already bound back in Phase 1's
+   full-non-variadic-surface pass. `node-alias?` has no C symbol to bind
+   at all: `fy_node_is_alias` is a `static inline` header wrapper
+   (`fy_node_get_type(fyn) == FYNT_SCALAR && fy_node_get_style(fyn) ==
+   FYNS_ALIAS`), not an exported/linkable symbol, so — confirmed against
+   `libfyaml-nodes.adb`'s own `Is_Alias`, which reimplements it the same
+   way — `node-alias?` is reimplemented directly in Scheme, the same
+   division of labor already used for `node-scalar?`/`node-sequence?`/
+   `node-mapping?`.
+
+   Confirmed live (not just asserted from the Ada port): libfyaml
+   detects a merge-key reference loop itself
+   (`fy_document_resolve` -> `fy_check_ref_loop`) and returns a clean
+   failure status rather than hanging — this also retroactively confirms
+   this session's own OOM-postmortem reasoning (which had already ruled
+   out anchor cycles for the specific incident investigated, since
+   neither fixture in use at the time had any) generalizes: even a
+   fixture built specifically to be a reference cycle is safe to parse
+   and resolve. One caveat carried forward unchanged from `alibfyaml`'s
+   own finding, and reproduced here bit-for-bit against the identical
+   installed package (`libfyaml-0.8-9.fc44`): resolving that exact cycle
+   fixture leaks a small, fixed amount of memory (confirmed under
+   valgrind: 64 bytes definitely lost + 440 bytes indirectly lost)
+   entirely inside libfyaml's own diagnostic path
+   (`fy_check_ref_loop` -> `fy_document_diag_report` ->
+   `fy_document_diag_vreport`) — not a defect in this binding, nothing
+   to fix on this side, same conclusion `alibfyaml` already reached
+   against the same libfyaml build.
 6. **Multi-document streaming**: `(slibfyaml documents streams)`, the
    no-recovery-after-parse-error behavior, buffer-sharing via the
    refcounted-copy design. `test-streams`, `test-buffer-lifetime`.

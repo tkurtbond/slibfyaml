@@ -27,6 +27,7 @@
    document-parse-string
    document-parse-file
    document-root
+   document-resolve!
    document-set-root!
    document-insert-at!
    document-create-scalar
@@ -218,6 +219,26 @@
   (node-wrap (fy_document_root (document-handle doc)) (document-liveness-box doc)))
 ;; The document's root node, or null-node if the document has none yet
 ;; -- same as alibfyaml's Root.
+
+(define (document-resolve! doc)
+  (check-document-live! doc)
+  (let ((status (fy_document_resolve (document-handle doc))))
+    (when (not (= status 0))
+      (raise-resolve-error "fy_document_resolve failed"))))
+;; Resolve anchors, aliases, and merge keys in doc in place -- the same
+;; resolution document-parse-string/-file perform automatically when
+;; resolve-anchors? is #t, but usable on a document parsed with
+;; resolve-anchors? #f (to inspect the raw, unresolved tree first via
+;; node-alias?/node-tag) or, once document-create-*/document-set-root!
+;; can build one, a document built programmatically. Same as
+;; alibfyaml's Resolve. Raises (exn slibfyaml resolve) on failure (e.g.
+;; a merge-key reference loop -- libfyaml detects this itself and
+;; returns a clean failure status rather than hanging, confirmed by
+;; alibfyaml against the same fixture this binding's own test-anchors
+;; reuses); libfyaml's header doesn't document what state doc is left
+;; in on failure (partial resolution is possible), so treat doc as
+;; unreliable afterward rather than assuming either full resolution or
+;; a clean rollback -- same caveat alibfyaml's own doc comment states.
 
 ;;;; Build
 

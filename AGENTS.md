@@ -163,6 +163,15 @@ easiest to introduce (see `document-parse-string`'s own comment on why
 its `handle-exceptions` wrapper exists), so they're not exempt from
 this check just because they're *expected* to fail.
 
+**One documented exception**: `test-anchors`'s merge-key-reference-loop
+case (`anchors_cycle.yaml`, resolved explicitly) does show a valgrind
+error — a small, fixed leak entirely inside libfyaml's own
+`fy_check_ref_loop`/diagnostic-reporting path, not this binding's code,
+reproduced bit-for-bit against the same installed package
+(`libfyaml-0.8-9.fc44`) `alibfyaml` already found and documented it
+against. Every other `test-anchors` scenario, and every other test file
+in full, remain clean.
+
 Run this on any test that creates/destroys a document, builds a buffer
 passed to `fy_document_build_from_string`/`fy_parser_set_string`, or
 touches `document-destroy!`/a finalizer, before considering the change

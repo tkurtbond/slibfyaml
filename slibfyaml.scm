@@ -24,6 +24,7 @@
    raise-data-error
    raise-emit-error
    raise-consumed
+   raise-resolve-error
    )
 
 (import scheme)
@@ -98,5 +99,12 @@
 ;; Distinct from use-after-free above: "your document is gone" and
 ;; "you already handed this specific node to document-insert-at!" are
 ;; different mistakes with different fixes.
+
+(define (raise-resolve-error message)
+  (abort (slibfyaml-condition 'resolve message)))
+;; Raised by document-resolve! when fy_document_resolve fails -- e.g. a
+;; merge-key reference loop, which libfyaml detects and reports as a
+;; clean failure status rather than hanging. Same as alibfyaml's
+;; Resolve_Error.
 
 ) ;; module
