@@ -36,9 +36,17 @@ one turns out to be the problem.
 
 ## Build
 
-Two ways, both confirmed working under both target CHICKEN versions
-(`/usr/local/sw/versions/chicken/5.4.0` and `.../6.0.0` on this machine
-— see PLAN.md's "Target CHICKEN version(s)"):
+`tests/GNUmakefile` codifies the manual `csc` inner loop below as
+`make build`/`make test`/`make clean`, run from within `tests/` — see
+its own header comment. Prefer it over retyping the commands by hand;
+the manual commands below are what it runs, kept here so the
+`-unit`/`-uses`/`-J` mechanics are still documented in one place, not
+because they need to be typed out per edit.
+
+Two ways to build the library itself, both confirmed working under
+both target CHICKEN versions (`/usr/local/sw/versions/chicken/5.4.0`
+and `.../6.0.0` on this machine — see PLAN.md's "Target CHICKEN
+version(s)"):
 
 **Via the real `.egg` file** (what an actual install does):
 
