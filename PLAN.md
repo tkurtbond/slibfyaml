@@ -732,12 +732,14 @@ re-introduce that bug here by not planning for it up front.)
 The requirement this section plans for: an entry point that returns
 plain Scheme data the way `yaml` egg's `yaml-load` and `libyaml` egg's
 `yaml->ss` do, but that can read every document in a multi-document
-stream, not just the first — fixing `yaml` egg's actual limitation
-(`yaml-load` collapses its parse seed to `(car seed)` on
-`document-end`, so it can only ever return the first document) without
-inheriting `libyaml` egg's awkward fix for the same problem (its
-`yaml->ss` returns a *callable* you invoke with a document index or
-`-1` for "all of them," rather than just handing back the data).
+stream, not just one — fixing `yaml` egg's actual limitation
+(`yaml-load` collapses its parse seed to `(car seed)` on every
+`document-end`, so each document's result clobbers the last and it can
+only ever return the *last* document of the stream, not the first —
+confirmed live, not just read off the source) without inheriting
+`libyaml` egg's awkward fix for the same problem (its `yaml->ss`
+returns a *callable* you invoke with a document index or `-1` for "all
+of them," rather than just handing back the data).
 
 ### Design: a decoder over the handle-based core, not a separate parser
 
@@ -886,6 +888,34 @@ before writing the first test file):
   design/implementation.
 - CHICKEN 4 support: not planned, not requested. See "Target CHICKEN
   version(s)" above for the CHICKEN 5/6 decision instead.
+- `!scheme/symbol` tag support: `yaml` egg special-cases a scalar
+  tagged `!scheme/symbol`, decoding its text as a Scheme symbol
+  (`(string->symbol ...)`, after stripping a leading `:`) rather than
+  a string — see the "Also: plain Scheme data" section's `yaml-load`
+  comparison. `(slibfyaml scheme)`'s `node->scheme` currently does no
+  tag-based dispatch at all (only shape-based: mapping/sequence/scalar
+  from `node-kind`, then core-schema type resolution for scalars) —
+  a tagged node's own tag (`node-tag`, since Phase 5) is available but
+  unused by the decoder. Consider before adding it:
+  - Whether symbol round-tripping is actually wanted here, or is
+    `yaml` egg's own Scheme-specific workaround for not otherwise
+    being able to dump/load a symbol distinctly from a string —
+    relevant only if `(slibfyaml scheme)` ever grows the encoder
+    direction (see "Explicitly not planned (for now): the inverse
+    direction" below); a decode-only reader has less reason to invent
+    a write-side convention nothing here yet produces.
+  - Whether it should be on by default or opt-in: an existing document
+    from another tool that happens to use `!scheme/symbol` for its own
+    unrelated purpose would silently decode differently than intended
+    if this egg treated the tag as a universal convention rather than
+    one specific to round-tripping *this* egg's own output.
+  - Scope: `yaml` egg only special-cases this one tag on scalars;
+    generalizing to arbitrary custom tags on mappings/sequences too
+    is a much bigger design question (schema selection, effectively)
+    that nothing here currently needs.
+  Not blocking anything currently planned — `node->scheme`/
+  `load-string`/`load-file` work fully without it; revisit if a real
+  call site wants Scheme symbols preserved through a YAML round-trip.
 
 ## Phased roadmap
 

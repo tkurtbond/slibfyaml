@@ -118,11 +118,13 @@
   (load-via-stream (document-stream-open-file path) resolve-anchors?))
 ;; Always return a list of decoded documents, even for single-document
 ;; input (a length-1 list) -- no thunk, no index argument, no -1
-;; sentinel, fixing `yaml` egg's actual limitation (yaml-load collapses
-;; its parse seed to (car seed) on document-end, so it can only ever
-;; return the first document) without inheriting `libyaml` egg's
-;; awkward fix for the same problem (its yaml->ss returns a callable
-;; you invoke with a document index). (car (load-string ...)) is
+;; sentinel, fixing `yaml` egg's actual limitation (confirmed live:
+;; yaml-load collapses its parse seed to (car seed) on every
+;; document-end, so each document's result clobbers the last and it
+;; can only ever return the *last* document of a multi-document
+;; stream, not the first) without inheriting `libyaml` egg's awkward
+;; fix for the same problem (its yaml->ss returns a callable you
+;; invoke with a document index). (car (load-string ...)) is
 ;; exactly as short as libyaml egg's own ((yaml->ss ...)) for the
 ;; single-document case anyway -- no load-string-first/load-file-first
 ;; convenience wrapper planned, per PLAN.md's own note, until a real

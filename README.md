@@ -90,8 +90,11 @@ an alist. `(slibfyaml scheme)` decodes a document (or any `node`) into
 plain Scheme data the same shape `yaml` egg's `yaml-load` returns
 (mapping → alist, sequence → list, scalar → resolved value), but
 `load-string`/`load-file` always return a **list of decoded documents**
-— fixing `yaml-load`'s actual limitation (it can only ever return the
-first document of a multi-document stream) without `libyaml` egg's
+— fixing `yaml-load`'s actual limitation (confirmed live: its
+`document-end` handler collapses the parse seed to `(car seed)` on
+every document boundary, so each document's result clobbers the
+previous one and it ends up returning only the *last* document of a
+multi-document stream, not the first) without `libyaml` egg's
 awkward fix for the same gap (its `yaml->ss` hands back a callable you
 invoke with a document index, rather than the data itself). This layer
 is a pure consumer of the handle-based core below it — no separate
