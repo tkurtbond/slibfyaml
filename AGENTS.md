@@ -84,6 +84,31 @@ Always `make -C tests build` (or the equivalent manual recompile)
 after running `chicken-install` here, before trusting any
 already-built test binary or running `make test` again.
 
+**`CHICKEN_INSTALL_PREFIX` does not fully sandbox a scratch
+install** — confirmed live: a scratch-prefix `chicken-install` still
+wrote a `slibfyaml.egg-info` metadata file into the *real* default
+repository (`chicken-install -repository`, e.g.
+`/usr/local/sw/versions/chicken/5.4.0/lib/chicken/11/`), even though
+every actual `.so`/`.o`/`.link` file correctly went only into the
+scratch prefix. Left uncorrected, that stray `.egg-info` reports a
+`chicken-status slibfyaml` as "installed" (with an `installed-files`
+list pointing at files that don't really exist there) while nothing
+is actually importable outside the scratch prefix — confusing, but
+harmless until a real (non-scratch) `chicken-install` overwrites it
+with accurate metadata, which is exactly what happened here
+2026-09-11 when the egg was genuinely installed into the real
+repository on request. Don't trust `chicken-status`/a stray
+`*.egg-info` alone as proof of a *usable* install after a
+scratch-prefix session — confirm with an actual `csi -e '(import
+...)'` against the repository path actually intended.
+
+Genuinely installing (no `CHICKEN_INSTALL_PREFIX`, i.e. `chicken-install`
+alone) makes the egg importable from anywhere on the machine with no
+`CHICKEN_REPOSITORY_PATH` override — confirmed live 2026-09-11 (through
+Phase 10) with a `csi -e '(import (slibfyaml scheme)) ...'` run from
+outside the repo entirely. Same clobbering/cleanup caveats above apply
+to a real install too, not just a scratch one.
+
 **Manually, module by module** (faster inner loop than a full
 `chicken-install` per edit) — compile every module the test needs, in
 dependency order, then link:
