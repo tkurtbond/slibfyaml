@@ -510,8 +510,9 @@
 
 (define (node-null-value? n)
   (check-node-live! n)
-  (or (fy_node_is_null (node-raw n))
-      (and (node-scalar? n) (null-text? (trimmed (node-scalar-value n))))))
+  (and (not (node-alias? n))
+       (or (fy_node_is_null (node-raw n))
+           (and (node-scalar? n) (null-text? (trimmed (node-scalar-value n)))))))
 ;; True if N is an empty/omitted scalar (fy_node_is_null resolves this
 ;; -- confirmed against the installed libfyaml header that a NULL node
 ;; argument itself also returns true, so this needs no extra
@@ -520,6 +521,32 @@
 ;; node-float?/node-boolean? below, doesn't require N to already be a
 ;; scalar (mirrors Is_Null_Value's own precondition, which is just
 ;; Is_Valid, not Is_Valid-and-then-Is_Scalar).
+;;
+;; The `not (node-alias? n)` guard goes beyond alibfyaml's own
+;; Is_Null_Value (which has no such check, and would have the identical
+;; latent bug below if exercised the same way): confirmed live, with
+;; valgrind's --track-origins=yes pointing squarely at libfyaml's own
+;; fy_token_alloc_rl/fy_parse_load_document (fy-token.h/fy-parse.c/
+;; fy-doc.c/fy-docbuilder.c), that calling fy_node_is_null on an
+;; unresolved alias node drawn from the STREAMING parser
+;; (document-stream-*, and therefore load-string/load-file) reads an
+;; uninitialized token field there, producing a wrong (and
+;; non-reproducible-under-valgrind, since valgrind's own memory layout
+;; masked it) #t. document-parse-string/-file's own one-shot
+;; fy_document_build_from_string/_file path does not hit this --
+;; confirmed not to, in isolation -- so the bug is specific to
+;; fy_parse_load_document. Skipping the call entirely for an alias node
+;; sidesteps it, and is arguably more correct regardless of the
+;; libfyaml bug: an unresolved alias's OWN text is its anchor-name
+;; reference, not real content, so neither fy_node_is_null nor a
+;; null-text-spelling check on that name (an anchor literally named
+;; "null" would otherwise wrongly read as null-valued before
+;; resolution, a latent issue independent of the libfyaml bug) is a
+;; meaningful question to ask before resolving it -- node->scheme's own
+;; contract already assumes resolution has happened for accurate typed
+;; decoding; resolve-anchors? #f is an explicit escape hatch for
+;; inspecting the raw tree, where "not conclusively null" is the
+;; honest, safe answer for an alias either way.
 
 (define (node-integer? n) (integer-text? (trimmed (node-scalar-value n))))
 (define (node-float? n) (float-text? (trimmed (node-scalar-value n))))

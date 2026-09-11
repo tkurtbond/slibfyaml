@@ -1171,9 +1171,68 @@ before writing the first test file):
    exactly, which pass no `FYPCF_RESOLVE_DOCUMENT` flag either) — call
    `document-resolve!` on a document drawn from a stream if anchor/
    alias resolution is wanted.
-7. **Value-materializing API**: `(slibfyaml scheme)` — `node->scheme`,
-   `load-string`/`load-file`, built on phases 2/3/6 above (needs typed
-   scalars and streaming already in place). `test-scheme`.
+7. **`[done]` Value-materializing API**: `(slibfyaml scheme)` —
+   `node->scheme`, `load-string`/`load-file`, built on phases 2/3/6
+   above as a pure consumer (no new C calls, no new condition kinds).
+   Unlike every other phase, no `alibfyaml` source exists to port —
+   Ada is statically typed and has no equivalent "decode to one generic
+   native value" operation — so this design is `slibfyaml`-specific,
+   motivated by parity with the existing `yaml`/`libyaml` Chicken eggs
+   instead (see this file's own "Value-materializing convenience API"
+   section). `node->scheme`'s scalar dispatch checks integer before
+   float deliberately (any valid integer text is also valid float
+   grammar, confirmed back in Phase 3 -- e.g. `"42"` is both
+   `node-integer?` and `node-float?` -- so checking float first would
+   silently widen every integer into a flonum); boolean/null never
+   overlap with int/float/each other so their relative order doesn't
+   matter. `test-scheme` covers scalar/mapping/sequence decoding
+   (including a malformed value degrading gracefully to its literal
+   string rather than raising, unlike the low-level typed accessors),
+   `node->scheme` on a sub-tree, single- and multi-document
+   `load-string`/`load-file`, and `resolve-anchors?` `#t`/`#f`.
+   Confirmed leak/error-free under valgrind.
+
+   **A genuinely new bug found while writing this phase's test, not one
+   `alibfyaml`'s own test suite already surfaced**: `node->scheme` on an
+   *unresolved* alias node drawn from `load-string`/`load-file` (i.e.
+   via the streaming parser, `document-stream-*`) intermittently
+   decoded as `'()` (null) instead of falling through to its literal
+   anchor-name text — reproduced consistently across native runs, but
+   only after enough prior heap activity (single-file scratch
+   reproductions in isolation did not trigger it). Root-caused with
+   valgrind's `--track-origins=yes` rather than guessed: the
+   uninitialized value traces to a heap allocation entirely inside
+   libfyaml itself — `fy_token_alloc_rl` (`fy-token.h`) via
+   `fy_token_queue_simple_internal`/`fy_fetch_value`/`fy_fetch_tokens`/
+   `fy_scan_peek`/`fy_scan_remove_peek`/`fy_parse_internal`
+   (`fy-parse.c`) via `fy_document_builder_load_document`
+   (`fy-docbuilder.c`) via `fy_parse_load_document` (`fy-doc.c`) — read
+   when `node-null-value?` calls `fy_node_is_null` on that node.
+   Confirmed narrowly scoped, not assumed: `document-parse-string`/
+   `-file`'s one-shot `fy_document_build_from_string`/`_file` path does
+   not allocate through this same code and never reproduces it in
+   isolation; only the streaming parser (`fy_parse_load_document`) can.
+   Also explains why a first valgrind run of the reproducing case
+   showed the uninitialized-value *warning* but still printed the
+   *correct* answer — valgrind's own memory layout happened to leave
+   the field zeroed, masking the very bug it was flagging; native runs
+   hit nonzero garbage there consistently instead.
+
+   Fixed in `node-null-value?` (not in libfyaml, which is out of this
+   binding's control) by short-circuiting to `#f` for any
+   `node-alias?` node, skipping `fy_node_is_null` — and the separate
+   null-text-spelling check — entirely for aliases. This is justified
+   independently of the libfyaml bug, too: an unresolved alias's own
+   text is a reference name, not real content (an anchor literally
+   named `"null"` would otherwise wrongly read as null-valued before
+   resolution, a latent issue `alibfyaml`'s own identically-structured
+   `Is_Null_Value` would share if it were ever exercised the same way),
+   so neither check is a meaningful question to ask pre-resolution —
+   `node->scheme`'s own contract already assumes resolution has
+   happened for accurate typed decoding, and `resolve-anchors? #f` is
+   an explicit escape hatch for inspecting the raw tree, where "not
+   conclusively null" is the honest, safe answer for an alias either
+   way.
 8. **Diagnostics polish**: gcc-style `Parse_Error` formatting,
    `node-location`/`node-has-location?`, `test-parse-errors`/
    `test-location`.

@@ -10,26 +10,30 @@ handles, emit it back out — rather than converting the whole document
 into a native Scheme value up front the way the existing `yaml` and
 `libyaml` Chicken eggs do.
 
-**Status: Phases 1-6 done** (skeleton; read-only parse + navigate;
+**Status: Phases 1-7 done** (skeleton; read-only parse + navigate;
 typed scalars; build + emit + mutate; anchors/resolve; multi-document
-streaming) — see `PLAN.md`'s Phased roadmap for each phase's own
-writeup. In short: parsing (`document-parse-string`/`-parse-file`),
-full read-only tree navigation, all seven condition kinds
+streaming; value-materializing API) — see `PLAN.md`'s Phased roadmap
+for each phase's own writeup. In short: parsing
+(`document-parse-string`/`-parse-file`), full read-only tree
+navigation, all seven condition kinds
 (`parse`/`use-after-free`/`missing-key`/`data`/`emit`/`consumed`/
 `resolve`), the full typed-scalar family (core schema plus the `0b`/`_`
 extensions), building/mutating/emitting a document
 (`document-create-*`/`node-append!`/`node-append-pair!`/
 `document-insert-at!`/`document->yaml-string`/`-write-to-file!`),
 anchor/alias/merge-key resolution (`document-resolve!`, `node-alias?`,
-`node-tag`), and multi-document streaming (`(slibfyaml documents
-streams)`, including the refcounted buffer-sharing fix a document
-drawn from a string-backed stream needs to outlive that stream safely)
-all work end to end. Confirmed via `tests/test-*.scm` (one file per
-concern, 8 files so far, all passing and leak/error-free under
-valgrind — including through every deliberate failure path each one
-exercises) under both CHICKEN 5.4.0 and 6.0.0. Remaining: the
-value-materializing convenience API (`(slibfyaml scheme)`), and
-diagnostics/packaging polish — see `PLAN.md`'s Phased roadmap.
+`node-tag`), multi-document streaming (`(slibfyaml documents streams)`,
+including the refcounted buffer-sharing fix a document drawn from a
+string-backed stream needs to outlive that stream safely), and the
+value-materializing convenience API (`(slibfyaml scheme)`'s
+`node->scheme`/`load-string`/`load-file`) all work end to end.
+Confirmed via `tests/test-*.scm` (one file per concern, 9 files so far,
+all passing and leak/error-free under valgrind — including through
+every deliberate failure path each one exercises, and one genuinely new
+libfyaml bug found and worked around along the way, not just bugs
+`alibfyaml` had already found — see PLAN.md's Phase 7 writeup) under
+both CHICKEN 5.4.0 and 6.0.0. Remaining: diagnostics/packaging polish —
+see `PLAN.md`'s Phased roadmap.
 
 ## Scope
 
@@ -108,9 +112,13 @@ parser, no separate typed-scalar logic. See PLAN.md's
   stream it came from (`tests/test-buffer-lifetime.scm` is the
   dedicated regression test for exactly this, ported from a real bug
   `alibfyaml` found the hard way with valgrind).
-- `slibfyaml-scheme.scm` — the value-materializing convenience API
-  (`node->scheme`, `load-string`, `load-file`) — not yet implemented,
-  Phase 7.
+- `slibfyaml-scheme.scm` — **done.** The value-materializing
+  convenience API (`node->scheme`, `load-string`, `load-file`) — a pure
+  consumer of the modules above, no new C calls or condition kinds of
+  its own. Finding this phase's own test surfaced: a genuinely new
+  (not `alibfyaml`-inherited) libfyaml bug, an uninitialized token
+  field its own streaming parser can leave behind, worked around in
+  `node-null-value?` — see PLAN.md's Phase 7 writeup.
 - `tests/` — one test file per concern, ported from `alibfyaml`'s test
   suite where the same case applies.
 - `PLAN.md` — design rationale, decisions, and open questions.

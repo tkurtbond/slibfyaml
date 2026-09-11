@@ -35,11 +35,13 @@ csc -unit slibfyaml -c -J slibfyaml.scm -o slibfyaml.o
 csc -unit slibfyaml-nodes -uses slibfyaml-thin -uses slibfyaml -c -J slibfyaml-nodes.scm -o slibfyaml-nodes.o
 csc -unit slibfyaml-documents -uses slibfyaml-thin -uses slibfyaml-nodes -uses slibfyaml -c -J slibfyaml-documents.scm -o slibfyaml-documents.o
 csc -unit slibfyaml-documents-streams -uses slibfyaml-thin -uses slibfyaml-documents -uses slibfyaml -c -J slibfyaml-documents-streams.scm -o slibfyaml-documents-streams.o
+csc -unit slibfyaml-scheme -uses slibfyaml-nodes -uses slibfyaml-documents -uses slibfyaml-documents-streams -c -J slibfyaml-scheme.scm -o slibfyaml-scheme.o
 ```
 
 Then, from `tests/` (see the `include` note under Test below for why
-`tests/` specifically) — link in `../slibfyaml-documents-streams.o` too
-for any test that uses `(slibfyaml documents streams)`:
+`tests/` specifically) — link in `../slibfyaml-documents-streams.o`
+and/or `../slibfyaml-scheme.o` too for any test that uses
+`(slibfyaml documents streams)`/`(slibfyaml scheme)`:
 
 ```sh
 csc -uses slibfyaml-thin -uses slibfyaml-nodes -uses slibfyaml-documents -uses slibfyaml \
@@ -172,6 +174,19 @@ backs its scalars is destroyed) — it came back clean under valgrind on
 the first implementation attempt here, not after finding a bug the
 hard way, because the refcounted-buffer-ref fix was ported in from
 `alibfyaml`'s own confirmed history rather than rediscovered.
+
+`test-scheme` is also clean, but getting there found a genuinely new
+bug (not one `alibfyaml`'s own history already flagged) — see
+PLAN.md's Phase 7 writeup: `node-null-value?` calling `fy_node_is_null`
+on an unresolved alias node drawn from the streaming parser
+(`document-stream-*`/`load-string`/`load-file`) read an uninitialized
+libfyaml-internal token field, intermittently misreporting such a node
+as null. Root-caused with `valgrind --track-origins=yes` — worth
+reaching for that flag specifically (not just the default
+`--leak-check=full`) the next time a check's *result* looks wrong in a
+way that doesn't reproduce consistently across valgrind vs. native
+runs, since that mismatch is itself a strong signal of exactly this
+uninitialized-value class of bug.
 
 **One documented exception**: `test-anchors`'s merge-key-reference-loop
 case (`anchors_cycle.yaml`, resolved explicitly) does show a valgrind

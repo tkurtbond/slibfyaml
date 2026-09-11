@@ -2,12 +2,10 @@
 ;;
 ;; slibfyaml.egg -- CHICKEN egg-information for slibfyaml.
 ;;
-;; Through Phase 6 (multi-document streaming): (slibfyaml thin),
-;; (slibfyaml), (slibfyaml nodes), (slibfyaml documents), and
-;; (slibfyaml documents streams) exist -- see PLAN.md's "Phased
-;; roadmap". Further extension components (slibfyaml.scheme) are added
-;; as each is implemented, not declared speculatively ahead of the code
-;; existing.
+;; Through Phase 7 (value-materializing API): (slibfyaml thin),
+;; (slibfyaml), (slibfyaml nodes), (slibfyaml documents),
+;; (slibfyaml documents streams), and (slibfyaml scheme) all exist --
+;; see PLAN.md's "Phased roadmap".
 ;;
 ;; No explicit intra-egg dependency declaration between components is
 ;; needed here, confirmed live by testing both ways: chicken-install
@@ -54,4 +52,6 @@
     (link-options "-L" "-lfyaml"))
   (extension slibfyaml.documents.streams
     (source "slibfyaml-documents-streams.scm")
-    (link-options "-L" "-lfyaml"))))
+    (link-options "-L" "-lfyaml"))
+  (extension slibfyaml.scheme
+    (source "slibfyaml-scheme.scm"))))
