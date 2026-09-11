@@ -22,10 +22,12 @@
    node->scheme
    load-string
    load-file
+   load-port
    )
 
 (import scheme)
 (import (chicken base))
+(import (chicken io))
 (import (slibfyaml nodes))
 (import (slibfyaml documents))
 (import (slibfyaml documents streams))
@@ -116,6 +118,9 @@
 
 (define (load-file path #!optional (resolve-anchors? #t))
   (load-via-stream (document-stream-open-file path) resolve-anchors?))
+
+(define (load-port port #!optional (resolve-anchors? #t))
+  (load-string (read-string #f port) resolve-anchors?))
 ;; Always return a list of decoded documents, even for single-document
 ;; input (a length-1 list) -- no thunk, no index argument, no -1
 ;; sentinel, fixing `yaml` egg's actual limitation (confirmed live:
@@ -129,5 +134,16 @@
 ;; single-document case anyway -- no load-string-first/load-file-first
 ;; convenience wrapper planned, per PLAN.md's own note, until a real
 ;; call site shows one is actually wanted.
+;;
+;; load-port itself is the same idiom as document-parse-port
+;; (slibfyaml-documents.scm), not a new document-stream-open-port --
+;; libfyaml's streaming parser has no portable FILE* to obtain from an
+;; arbitrary CHICKEN port, and fy_document_build_from_fp isn't real
+;; streaming to begin with (see PLAN.md's Phase 9/10 writeups), so
+;; reading the port to its own EOF up front and handing the whole text
+;; to load-string loses nothing: libfyaml never streams less than a
+;; full document's worth of bytes regardless, and this API's whole
+;; point is that the caller never touches the input buffer once
+;; decoded anyway.
 
 ) ;; module

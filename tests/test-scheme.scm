@@ -5,17 +5,18 @@
 ;;;; that a malformed scalar degrades gracefully to its literal string
 ;;;; text rather than raising -- unlike the low-level typed accessors
 ;;;; test-scalars.scm exhaustively covers, which do raise), node->scheme
-;;;; on a sub-tree (not just a document root), load-string/load-file
-;;;; always returning a list of decoded documents (single- and
-;;;; multi-document input), and resolve-anchors? #t vs #f on load-string.
-;;;; No alibfyaml source to port -- see slibfyaml-scheme.scm's own
-;;;; header comment for why.
+;;;; on a sub-tree (not just a document root), load-string/load-file/
+;;;; load-port always returning a list of decoded documents (single-
+;;;; and multi-document input), and resolve-anchors? #t vs #f on
+;;;; load-string. No alibfyaml source to port -- see
+;;;; slibfyaml-scheme.scm's own header comment for why.
 
 (include "check.scm")
 
 (import (slibfyaml scheme))
 (import (slibfyaml documents))
 (import (slibfyaml nodes))
+(import (chicken io))
 
 (define (alookup key alist) (let ((p (assoc key alist))) (and p (cdr p))))
 
@@ -98,6 +99,23 @@ nested:
   (check "load-file document 2 decodes correctly" (string=? "second" (alookup "name" (list-ref docs 1))))
   (check "load-file document 3 decodes correctly" (string=? "third" (alookup "name" (list-ref docs 2))))
   (check "load-file document 2's typed value decodes as an integer" (= 2 (alookup "value" (list-ref docs 1)))))
+
+;; -----------------------------------------------------------------
+;; load-port matches load-string on a string port, and load-file on a
+;; multi-document file opened as a port -- same composition
+;; document-parse-port itself uses (read-string #f port), confirmed
+;; here at the multi-document layer instead of the single-document one.
+;; -----------------------------------------------------------------
+(let ((docs (load-port (open-input-string "name: widget\ncount: 42\n"))))
+  (check "load-port on a string port returns a length-1 list" (= 1 (length docs)))
+  (check "load-port on a string port decodes correctly"
+         (and (string=? "widget" (alookup "name" (car docs)))
+              (= 42 (alookup "count" (car docs))))))
+
+(let ((docs (call-with-input-file "streams.yaml" load-port)))
+  (check "load-port on a 3-document stream file returns a length-3 list" (= 3 (length docs)))
+  (check "load-port document 1 decodes correctly" (string=? "first" (alookup "name" (list-ref docs 0))))
+  (check "load-port document 3 decodes correctly" (string=? "third" (alookup "name" (list-ref docs 2)))))
 
 ;; -----------------------------------------------------------------
 ;; resolve-anchors? #t (default) vs #f on load-string, using the same

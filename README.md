@@ -28,7 +28,8 @@ document (`document-create-*`/`node-append!`/`node-append-pair!`/
 streaming (`(slibfyaml documents streams)`, including the refcounted
 buffer-sharing fix a document drawn from a string-backed stream needs
 to outlive that stream safely), the value-materializing convenience
-API (`(slibfyaml scheme)`'s `node->scheme`/`load-string`/`load-file`),
+API (`(slibfyaml scheme)`'s `node->scheme`/`load-string`/`load-file`/
+`load-port`),
 and source-location access (`node-location`/`node-has-location?`, plus
 gcc-style `"file:line:col: error: ..."` parse-error formatting, done
 since Phase 2) all work end to end. Confirmed via `tests/test-*.scm`
@@ -94,7 +95,7 @@ Handles aren't always wanted — sometimes you just want a config file as
 an alist. `(slibfyaml scheme)` decodes a document (or any `node`) into
 plain Scheme data the same shape `yaml` egg's `yaml-load` returns
 (mapping → alist, sequence → list, scalar → resolved value), but
-`load-string`/`load-file` always return a **list of decoded documents**
+`load-string`/`load-file`/`load-port` always return a **list of decoded documents**
 — fixing `yaml-load`'s actual limitation (confirmed live: its
 `document-end` handler collapses the parse seed to `(car seed)` on
 every document boundary, so each document's result clobbers the
@@ -144,8 +145,12 @@ parser, no separate typed-scalar logic. See PLAN.md's
   dedicated regression test for exactly this, ported from a real bug
   `alibfyaml` found the hard way with valgrind).
 - `slibfyaml-scheme.scm` — **done.** The value-materializing
-  convenience API (`node->scheme`, `load-string`, `load-file`) — a pure
-  consumer of the modules above, no new C calls or condition kinds of
+  convenience API (`node->scheme`, `load-string`, `load-file`,
+  `load-port`) — a pure
+  consumer of the modules above (`load-port` itself a thin composition
+  of `load-string` with `(chicken io)`'s `read-string`, the same
+  read-whole-port-upfront idiom `document-parse-port` uses one layer
+  down), no new C calls or condition kinds of
   its own. Finding this phase's own test surfaced: a genuinely new
   (not `alibfyaml`-inherited) libfyaml bug, an uninitialized token
   field its own streaming parser can leave behind, worked around in
