@@ -60,7 +60,29 @@ round-trips correctly (build, install, then `csi -e '(import (slibfyaml
 thin)) ...'` against `CHICKEN_REPOSITORY_PATH=$PREFIX/lib/chicken/<N>`,
 where `<N>` is CHICKEN's binary-version directory, `11` for 5.4.0 and
 `12` for 6.0.0 on this machine — found live, not documented anywhere
-obvious).
+obvious). Re-confirmed 2026-09-11 (through Phase 10) with a full `csi`
+smoke test importing all six modules and exercising
+`document-parse-port`/`document-write-to-port!` against the real
+dynamically-loaded extensions, not just the manual static-link path
+below.
+
+**Running `chicken-install` in the repo root clobbers the manual
+build's `slibfyaml.o`** — confirmed live, found by exactly this
+happening: `chicken-install`'s own build of the base `slibfyaml`
+component's dynamic `.so` reuses `slibfyaml.o` as its own transient
+intermediate object (same default name the manual `-unit slibfyaml -c
+-J slibfyaml.scm -o slibfyaml.o` compile below produces), then deletes
+it once linked into `slibfyaml.so` — silently destroying the object
+the manual `csc` inner loop / `tests/GNUmakefile` depend on, even
+though `chicken-install` was only asked to install into a *scratch*
+`CHICKEN_INSTALL_PREFIX` elsewhere. `chicken-install` also leaves its
+own `*.so`/`*.link`/`*.static.o` byproducts sitting in the repo root
+(gitignored, but still clutter — `rm -f *.so *.link *.static.o` after
+a scratch install, being careful not to touch the manual build's own
+plain `*.o`/`*.import.scm` files, which use different names).
+Always `make -C tests build` (or the equivalent manual recompile)
+after running `chicken-install` here, before trusting any
+already-built test binary or running `make test` again.
 
 **Manually, module by module** (faster inner loop than a full
 `chicken-install` per edit) — compile every module the test needs, in
