@@ -882,10 +882,13 @@ before writing the first test file):
 
 ## Open questions
 
-- License: `alibfyaml` currently has none chosen either; the two
+- ~~License: `alibfyaml` currently has none chosen either; the two
   existing Chicken YAML eggs are BSD-style (`yaml`) and MIT
   (`libyaml`). Pick one before the first public release, doesn't block
-  design/implementation.
+  design/implementation.~~ Resolved 2026-09-11: BSD 3-Clause, on
+  request. `LICENSE` added; `slibfyaml.egg`'s `license` field updated
+  from a placeholder `"BSD-2-Clause"` to the actual
+  `"BSD-3-Clause"` decision.
 - CHICKEN 4 support: not planned, not requested. See "Target CHICKEN
   version(s)" above for the CHICKEN 5/6 decision instead.
 - `!scheme/symbol` tag support: `yaml` egg special-cases a scalar

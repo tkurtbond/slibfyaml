@@ -172,6 +172,6 @@ while developing.
 
 ## License
 
-Undecided — see PLAN.md open questions. (`alibfyaml` is unlicensed at
-time of writing; the existing `yaml` and `libyaml` Chicken eggs are
-BSD-style and MIT respectively.)
+BSD 3-Clause — see `LICENSE`. (`alibfyaml` is unlicensed at time of
+writing; the existing `yaml` and `libyaml` Chicken eggs are BSD-style
+and MIT respectively.)

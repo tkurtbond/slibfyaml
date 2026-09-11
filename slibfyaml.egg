@@ -40,7 +40,7 @@
 ((synopsis "Handle/tree binding to libfyaml (YAML 1.2 core-schema parser/emitter/document API), alibfyaml's Ada design ported to CHICKEN Scheme")
  (author "Thomas Kurt Bond")
  (category ffi)
- (license "BSD-2-Clause")
+ (license "BSD-3-Clause")
  (dependencies (chicken "5.4.0"))
  (foreign-dependencies "libfyaml -- https://github.com/pantoniou/libfyaml (developed against the system package reporting version 0.8 but exposing the 1.0-beta1 API; see PLAN.md's \"Target libfyaml version\" section)")
 
