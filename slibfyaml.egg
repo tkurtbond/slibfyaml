@@ -2,16 +2,16 @@
 ;;
 ;; slibfyaml.egg -- CHICKEN egg-information for slibfyaml.
 ;;
-;; Through Phase 9 (test/example parity audit): (slibfyaml thin),
+;; Through Phase 10 (port I/O convenience): (slibfyaml thin),
 ;; (slibfyaml), (slibfyaml nodes), (slibfyaml documents),
 ;; (slibfyaml documents streams), and (slibfyaml scheme) all exist --
 ;; see PLAN.md's "Phased roadmap". Phase 8 added no new component,
 ;; only node-has-location?/node-location to (slibfyaml nodes) and
 ;; 'line/'column fields on (exn slibfyaml data) in (slibfyaml). Phase 9
 ;; added no component or API surface at all -- test/example coverage
-;; only (tests/test-path.scm, tests/example-*.scm), plus a decision
-;; (documented in PLAN.md/README.md) not to add a document-parse-port
-;; entry point.
+;; only (tests/test-path.scm, tests/example-*.scm). Phase 10 added no
+;; new component either, only document-parse-port/
+;; document-write-to-port! to the existing (slibfyaml documents).
 ;;
 ;; No explicit intra-egg dependency declaration between components is
 ;; needed here, confirmed live by testing both ways: chicken-install

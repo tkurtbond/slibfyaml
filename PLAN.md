@@ -1444,12 +1444,65 @@ before writing the first test file):
    remaining file in one internal `fread()`, regardless of how many
    documents worth of bytes that is — so an already-open CHICKEN port
    can get the same effective behavior today with no new binding
-   surface at all: `(document-parse-string (read-string #f port))`,
-   confirmed live to work identically against both a string port and a
-   real open file port. That composition is the documented idiom for
-   this case (see README.md) rather than a new `document-parse-port`
-   entry point.
-10. **Packaging**: finalize `.egg` metadata, license, README examples
+   surface at all: `(document-parse-string (read-string #f port))`.
+   That composition was documented as the idiom for this case (see
+   README.md) rather than a new `document-parse-port` entry point —
+   revisited in Phase 10 below: still no new FFI surface (the
+   conclusion above about `fy_document_build_from_fp`/a portable
+   `FILE *` doesn't change), but promoted from "an idiom the caller
+   types out" to an actual named binding, on request.
+10. **`[done]` Port I/O convenience**: `document-parse-port` and
+    `document-write-to-port!`, added to `(slibfyaml documents)` on
+    request rather than from a gap found by comparing against
+    `alibfyaml` (Ada's own `Text_IO` package is GNAT-specific to begin
+    with — see Phase 9's own writeup — so there is no Ada original to
+    port here; this phase has no `alibfyaml` source behind it, same
+    situation Phase 7's own `(slibfyaml scheme)` was in).
+
+    `document-parse-port` is exactly Phase 9's own documented idiom
+    (`(document-parse-string (read-string #f port))`), promoted to a
+    real binding rather than left as prose a caller has to remember —
+    the conclusion that motivated leaving it as an idiom instead of a
+    new `fy_document_build_from_fp` binding still holds (no portable
+    `FILE *` obtainable from a CHICKEN port, and that call isn't real
+    streaming anyway), so this is a pure composition, no new FFI
+    surface at all. The one wrinkle: `document-parse-string` always
+    labels a parse failure's `file` field `"(string-in-memory)"`,
+    hard-coded — reusing it as-is for port input would misreport a
+    port-sourced failure as if the caller had literally typed a string
+    constant, which is actively misleading (a port most often *is*
+    backed by a real file the caller opened elsewhere). Fixed by
+    factoring the shared copy-buffer/`parse-common` logic out of
+    `document-parse-string` into a private `parse-string/labeled`
+    taking the label as a parameter, so `document-parse-port` can pass
+    its own `"(port)"` label instead of inheriting the string-specific
+    one — `document-parse-string` itself is unchanged in behavior or
+    signature, just now implemented as `parse-string/labeled` with the
+    fixed label baked back in at that one call site.
+
+    `document-write-to-port!` has no equivalent idiom already
+    documented (Phase 9 covered reading, not writing), but the same
+    reasoning applies symmetrically: `fy_emit_document_to_fp` would
+    have the identical `FILE *`-from-a-port problem
+    `fy_document_build_from_fp` does, for a library-side emit that
+    isn't obviously streaming either (unconfirmed either way, but no
+    reason to assume otherwise given the parse side's own behavior) —
+    so this is `(write-string (document->yaml-string doc flags) #f
+    port)`, composing the existing string-based emitter with
+    `(chicken io)`'s own port write, no new FFI surface here either.
+
+    Both take the same optional-argument shape their string/file
+    counterparts already use (`resolve-anchors?` on the parse side,
+    `flags` on the emit side). `tests/test-port-io.scm` confirms both
+    round-trip through a `open-input-string`/`open-output-string`
+    port pair, `document-parse-port` on a real open file port reads
+    the same as `document-parse-file` on the same path, a malformed
+    port raises `(exn slibfyaml parse)` with the `"(port)"` file
+    label (not `"(string-in-memory)"`), and `document-write-to-port!`
+    with non-default `flags` (e.g. `emit-mode-json`) produces the same
+    text `document->yaml-string` would for the same flags. Confirmed
+    leak/error-free under valgrind.
+11. **Packaging**: finalize `.egg` metadata, license, README examples
     matching the finished API, submit to CHICKEN's egg index if
     desired.
 

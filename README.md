@@ -10,49 +10,54 @@ handles, emit it back out — rather than converting the whole document
 into a native Scheme value up front the way the existing `yaml` and
 `libyaml` Chicken eggs do.
 
-**Status: Phases 1-9 done** (skeleton; read-only parse + navigate;
+**Status: Phases 1-10 done** (skeleton; read-only parse + navigate;
 typed scalars; build + emit + mutate; anchors/resolve; multi-document
 streaming; value-materializing API; diagnostics polish; test/example
-parity audit) — see
+parity audit; port I/O convenience) — see
 `PLAN.md`'s Phased roadmap for each phase's own writeup. In short:
-parsing (`document-parse-string`/`-parse-file`), full read-only tree
-navigation, all seven condition kinds
+parsing (`document-parse-string`/`-parse-file`/`-parse-port`), full
+read-only tree navigation, all seven condition kinds
 (`parse`/`use-after-free`/`missing-key`/`data`/`emit`/`consumed`/
 `resolve`, `data` now carrying `'line`/`'column` alongside `'path`
 where a location is available), the full typed-scalar family (core
 schema plus the `0b`/`_` extensions), building/mutating/emitting a
 document (`document-create-*`/`node-append!`/`node-append-pair!`/
-`document-insert-at!`/`document->yaml-string`/`-write-to-file!`),
-anchor/alias/merge-key resolution (`document-resolve!`, `node-alias?`,
-`node-tag`), multi-document streaming (`(slibfyaml documents streams)`,
-including the refcounted buffer-sharing fix a document drawn from a
-string-backed stream needs to outlive that stream safely), the
-value-materializing convenience API (`(slibfyaml scheme)`'s
-`node->scheme`/`load-string`/`load-file`), and source-location access
-(`node-location`/`node-has-location?`, plus gcc-style
-`"file:line:col: error: ..."` parse-error formatting, done since Phase
-2) all work end to end. Confirmed via `tests/test-*.scm` (one file per
-concern, 12 files, all passing and leak/error-free under valgrind —
-including through every deliberate failure path each one exercises,
-and one genuinely new libfyaml bug found and worked around along the
-way, not just bugs `alibfyaml` had already found — see PLAN.md's Phase
-7 writeup) plus three worked `tests/example-*.scm` demonstrations
-(gcc-style diagnostics on a syntax error, a typed-value error, and a
-missing-required-key case shown via `node-location`, `node-path`, and
-both together — ported from `alibfyaml`'s own `test/example_*.adb`,
-see PLAN.md's Phase 9 writeup), under both CHICKEN 5.4.0 and 6.0.0.
-Remaining: packaging polish — see `PLAN.md`'s Phased roadmap.
+`document-insert-at!`/`document->yaml-string`/`-write-to-file!`/
+`-write-to-port!`), anchor/alias/merge-key resolution
+(`document-resolve!`, `node-alias?`, `node-tag`), multi-document
+streaming (`(slibfyaml documents streams)`, including the refcounted
+buffer-sharing fix a document drawn from a string-backed stream needs
+to outlive that stream safely), the value-materializing convenience
+API (`(slibfyaml scheme)`'s `node->scheme`/`load-string`/`load-file`),
+and source-location access (`node-location`/`node-has-location?`, plus
+gcc-style `"file:line:col: error: ..."` parse-error formatting, done
+since Phase 2) all work end to end. Confirmed via `tests/test-*.scm`
+(one file per concern, 13 files, all passing and leak/error-free under
+valgrind — including through every deliberate failure path each one
+exercises, and one genuinely new libfyaml bug found and worked around
+along the way, not just bugs `alibfyaml` had already found — see
+PLAN.md's Phase 7 writeup) plus three worked `tests/example-*.scm`
+demonstrations (gcc-style diagnostics on a syntax error, a typed-value
+error, and a missing-required-key case shown via `node-location`,
+`node-path`, and both together — ported from `alibfyaml`'s own
+`test/example_*.adb`, see PLAN.md's Phase 9 writeup), under both
+CHICKEN 5.4.0 and 6.0.0. Remaining: packaging polish — see `PLAN.md`'s
+Phased roadmap.
 
 Parsing from an already-open CHICKEN port (a file the caller opened
-itself, `(current-input-port)`, etc.) has no dedicated entry point —
-`document-parse-string`/`-parse-file` cover the string/path cases;
-for a port, read it fully first: `(document-parse-string (read-string
-#f port))`. See PLAN.md's Phase 9 writeup for why this, not a new
-`document-parse-port`, is the documented idiom here (libfyaml's own
-`fy_document_build_from_fp` isn't real streaming either — it typically
+itself, `(current-input-port)`, etc.) is `document-parse-port`, and
+emitting to one is `document-write-to-port!` — both plain compositions
+of the existing string-based `document-parse-string`/
+`document->yaml-string` with `(chicken io)`'s own `read-string`/
+`write-string`, not new FFI surface: libfyaml's own
+`fy_document_build_from_fp` isn't real streaming anyway (it typically
 reads the whole remaining file in one internal `fread()` regardless of
-document count — and CHICKEN has no portable way to obtain a `FILE *`
-from an arbitrary port to bind it in the first place).
+document count), and CHICKEN has no portable way to obtain a `FILE *`
+from an arbitrary port to bind it against in the first place — see
+PLAN.md's Phase 9/10 writeups. A malformed `document-parse-port` input
+reports its `(exn slibfyaml parse)` condition's `'file` property as
+`"(port)"`, distinct from `document-parse-string`'s own
+`"(string-in-memory)"`.
 
 ## Scope
 
@@ -127,6 +132,9 @@ parser, no separate typed-scalar logic. See PLAN.md's
   buffer uniformly, shared with a document-stream and every document
   drawn from it where that's genuinely needed. Building/mutating/
   emitting (Phase 4) and `document-resolve!` (Phase 5) live here too.
+  `document-parse-port`/`document-write-to-port!` (Phase 10) round out
+  parsing/emitting with a port-based entry point alongside the
+  string/file ones, composed from them rather than new FFI surface.
 - `slibfyaml-documents-streams.scm` — **done.** Multi-document YAML
   streams built on libfyaml's separate streaming-parser API — a
   document-stream owns its own `fy_parser`/`fy_diag` and a read-ahead

@@ -12,6 +12,7 @@ tests/test-mutate
 tests/test-navigate
 tests/test-parse-errors
 tests/test-path
+tests/test-port-io
 tests/test-quickstart
 tests/test-scalars
 tests/test-scheme

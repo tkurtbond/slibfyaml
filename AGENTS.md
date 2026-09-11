@@ -194,17 +194,18 @@ valgrind --leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=
 
 `test-quickstart`, `test-navigate`, `test-scalars`, `test-mutate`,
 `test-streams`, `test-buffer-lifetime`, `test-location`,
-`test-parse-errors`, `test-path`, `example-syntax-error`,
-`example-value-error`, and `example-missing-field` are confirmed
-leak/error-free the same way, including through the exception paths (a
-deliberately malformed parse, a use-after-free triggered on purpose,
-every `missing-key`/`data` condition `test-scalars` exercises,
-`test-mutate`'s `document-insert-at!` scenarios, `test-streams`'s
-mid-stream-parse-error case, every `document-parse-file`/
-`-parse-string` malformed-input case `test-parse-errors` exercises,
-and every deliberate parse/value/missing-key failure the three
-`example-*` programs demonstrate) — those paths are exactly where a
-missed `c-free`/double-`c-free` is easiest to introduce (see
+`test-parse-errors`, `test-path`, `test-port-io`,
+`example-syntax-error`, `example-value-error`, and
+`example-missing-field` are confirmed leak/error-free the same way,
+including through the exception paths (a deliberately malformed parse,
+a use-after-free triggered on purpose, every `missing-key`/`data`
+condition `test-scalars` exercises, `test-mutate`'s
+`document-insert-at!` scenarios, `test-streams`'s mid-stream-parse-error
+case, every `document-parse-file`/`-parse-string`/`-parse-port`
+malformed-input case `test-parse-errors`/`test-port-io` exercises, and
+every deliberate parse/value/missing-key failure the three `example-*`
+programs demonstrate) — those paths are exactly where a missed
+`c-free`/double-`c-free` is easiest to introduce (see
 `document-parse-string`'s own comment on why its `handle-exceptions`
 wrapper exists), so they're not exempt from this check just because
 they're *expected* to fail.

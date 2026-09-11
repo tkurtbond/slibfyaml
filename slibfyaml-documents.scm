@@ -26,6 +26,7 @@
    document?
    document-parse-string
    document-parse-file
+   document-parse-port
    document-root
    document-resolve!
    document-set-root!
@@ -35,6 +36,7 @@
    document-create-mapping
    document->yaml-string
    document-write-to-file!
+   document-write-to-port!
    emit-default emit-sort-keys
    emit-mode-block emit-mode-flow emit-mode-flow-oneline emit-mode-json
    document-destroy!
@@ -58,6 +60,7 @@
 (import (chicken memory))
 (import (chicken gc))
 (import (chicken condition))
+(import (chicken io))
 (import (slibfyaml thin))
 (import (slibfyaml nodes))
 (import (slibfyaml))
@@ -243,7 +246,7 @@
 
 ;;;; Parse
 
-(define (document-parse-string text #!optional (resolve-anchors? #t))
+(define (parse-string/labeled text file-label resolve-anchors?)
   (let* ((len (string-length text))
          (buf (c-malloc len)))
     (move-memory! text buf len)
@@ -251,8 +254,18 @@
       (begin (c-free buf) (abort exn))
       (let ((handle (parse-common
                      (lambda (cfg) (fy_document_build_from_string cfg buf len))
-                     "(string-in-memory)" resolve-anchors?)))
+                     file-label resolve-anchors?)))
         (document-wrap handle (make-buffer-ref buf))))))
+;; Shared by document-parse-string/document-parse-port below -- both
+;; ultimately hand libfyaml a copied, malloc'd buffer via
+;; fy_document_build_from_string, differing only in file-label (each
+;; call site's own fixed string, matching alibfyaml's own
+;; Collected_Errors reasoning: neither a Scheme string nor a CHICKEN
+;; port has a real filename libfyaml could otherwise fall back to, so
+;; each source kind gets an honest label of its own rather than either
+;; borrowing the other's or falling back to libfyaml's synthetic,
+;; run-varying "<memory-@ADDR-ADDR>").
+;;
 ;; buf is copied from text (never a pointer into text itself, per the
 ;; buffer-lifetime design above) and kept alive, wrapped in a fresh
 ;; buffer-ref (count 1, released -- and, since nothing else ever
@@ -263,6 +276,28 @@
 ;; same double-free-vs-leak class of mistake alibfyaml's own
 ;; Parse_Common bug was, guarded against here from the start rather
 ;; than found later.
+
+(define (document-parse-string text #!optional (resolve-anchors? #t))
+  (parse-string/labeled text "(string-in-memory)" resolve-anchors?))
+
+(define (document-parse-port port #!optional (resolve-anchors? #t))
+  (parse-string/labeled (read-string #f port) "(port)" resolve-anchors?))
+;; Reads port to its own end-of-file via (chicken io)'s read-string,
+;; then parses exactly as document-parse-string would -- no new FFI
+;; surface (see PLAN.md's Phase 10 writeup for why: no portable way to
+;; obtain a real C FILE* from an arbitrary CHICKEN port to bind
+;; libfyaml's own fy_document_build_from_fp against, and that call
+;; isn't genuine streaming even in Ada/GNAT's own C_Streams escape
+;; hatch -- a single call there typically reads the entire remaining
+;; file in one internal fread() regardless of document count, so
+;; reading the port fully upfront loses nothing in practice). Only the
+;; first document of a multi-document port's content is parsed, same
+;; "first document only" semantics as document-parse-string/-file --
+;; use (slibfyaml documents streams) for a real multi-document stream
+;; instead. file-label is the fixed "(port)", distinct from
+;; document-parse-string's own "(string-in-memory)", so a parse
+;; failure's reported file doesn't misleadingly suggest the caller
+;; passed a literal string constant.
 
 (define (document-parse-file path #!optional (resolve-anchors? #t))
   (let ((handle (parse-common
@@ -419,6 +454,18 @@
       (raise-emit-error
        (string-append "fy_emit_document_to_file failed for \"" path "\"")))))
 ;; Emit doc to the file at path -- same as alibfyaml's Write_To_File.
+
+(define (document-write-to-port! doc port #!optional (flags emit-default))
+  (write-string (document->yaml-string doc flags) #f port))
+;; Emit doc to an already-open CHICKEN output port -- no alibfyaml
+;; equivalent exists to port from (Ada's own Text_IO-based I/O has the same
+;; GNAT-specific-extension problem on the write side libfyaml's own
+;; fy_emit_document_to_fp would have here: no portable FILE* out of a
+;; CHICKEN port to bind it against -- see PLAN.md's Phase 10 writeup).
+;; Composes document->yaml-string (which already does its own
+;; check-document-live! and raise-emit-error) with (chicken io)'s own
+;; write-string rather than adding new FFI surface -- symmetric with
+;; document-parse-port's own composition on the read side.
 
 ;;;; Destruction
 

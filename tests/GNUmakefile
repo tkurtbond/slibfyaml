@@ -38,7 +38,8 @@ RUN_CAP     := bash -c 'ulimit -v 2000000; exec timeout 30 "$$@"' --
 
 THIN_ONLY_PROGS := test-thin
 CORE_PROGS      := test-quickstart test-navigate test-scalars test-mutate \
-                   test-anchors test-location test-parse-errors test-path
+                   test-anchors test-location test-parse-errors test-path \
+                   test-port-io
 STREAM_PROGS    := test-streams test-buffer-lifetime
 SCHEME_PROGS    := test-scheme
 EXAMPLE_PROGS   := example-syntax-error example-value-error example-missing-field
